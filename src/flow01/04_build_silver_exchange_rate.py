@@ -11,6 +11,7 @@
 # - Write mode: replace only the changed date(s), not the whole table
 #   (INSERT INTO ... REPLACE USING, Databricks Runtime 17.2+ for unpartitioned tables).
 
+# COMMAND ----------
 # ── Parameters (passed by DABs job as job-level parameters) ──
 # DABs dev mode prefixes schema names with dev_<username>_.
 # Compute the correct defaults so interactive runs match the bundle.

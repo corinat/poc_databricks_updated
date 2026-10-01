@@ -14,6 +14,7 @@
 # a step natively before adding an external package").
 # Previous version (Python requests library) is kept below, commented out.
 
+# COMMAND ----------
 # ── Parameters (passed by DABs job as job-level parameters) ──
 # DABs dev mode prefixes schema names with dev_<username>_.
 # Compute the correct default so interactive runs match the bundle.
