@@ -1,0 +1,4 @@
+country code,customer id,customer name,parent customer id
+PL,111,Ava Stone - Warsaw Branch,101
+PL,112,Ava Stone - Gdansk Branch,101
+US,113,Mia Chen - New York Store,103

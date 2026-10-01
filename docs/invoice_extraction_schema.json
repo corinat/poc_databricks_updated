@@ -1,0 +1,140 @@
+{
+  "invoice_id": {
+    "type": "string",
+    "description": "Unique invoice identifier, printed as `Faktura VAT {invoice_id} oryginal`"
+  },
+  "invoice_date": {
+    "type": "string",
+    "description": "Date of issue and date of delivery/service completion, both printed with this same value, format YYYY-MM-DD"
+  },
+  "place_of_issue": {
+    "type": "string",
+    "description": "City where the invoice was issued, printed as `Miejsce wystawienia`"
+  },
+  "order_id": {
+    "type": "string",
+    "description": "Source sales order identifier this invoice was raised for, printed as `Order ID`"
+  },
+  "invoice_status": {
+    "type": "enum",
+    "labels": ["issued", "void"],
+    "description": "Status of the invoice as printed next to the order ID"
+  },
+  "buyer": {
+    "type": "object",
+    "description": "Buyer information, printed in the `Nabywca` box",
+    "properties": {
+      "name": {
+        "type": "string",
+        "description": "Name of the buyer"
+      },
+      "customer_id": {
+        "type": "string",
+        "description": "Customer identifier, printed as `Customer ID`"
+      },
+      "country": {
+        "type": "string",
+        "description": "Country of the buyer, printed as `Kraj`"
+      }
+    }
+  },
+  "seller": {
+    "type": "object",
+    "description": "Seller information, printed in the header and in the `Sprzedawca` box",
+    "properties": {
+      "name": {
+        "type": "string",
+        "description": "Name of the seller"
+      },
+      "street": {
+        "type": "string",
+        "description": "Street and building/flat number of the seller, printed as one combined address line"
+      },
+      "postal_code": {
+        "type": "string",
+        "description": "Postal code of the seller"
+      },
+      "city": {
+        "type": "string",
+        "description": "City of the seller"
+      },
+      "tax_id": {
+        "type": "string",
+        "description": "Tax ID (NIP) of the seller, printed as `NIP`"
+      }
+    }
+  },
+  "totals": {
+    "type": "object",
+    "description": "Invoice totals, printed in the `Razem` and `Razem do zaplaty` summary boxes",
+    "properties": {
+      "currency": {
+        "type": "string",
+        "description": "Currency code the invoice amounts are expressed in, printed next to `Razem do zaplaty`"
+      },
+      "total_net_amount": {
+        "type": "number",
+        "description": "Total net amount for the whole invoice"
+      },
+      "total_tax_amount": {
+        "type": "number",
+        "description": "Total tax amount for the whole invoice"
+      },
+      "total_gross_amount": {
+        "type": "number",
+        "description": "Total gross amount for the whole invoice, printed as `Razem do zaplaty`"
+      }
+    }
+  },
+  "items": {
+    "type": "array",
+    "description": "List of items grouped by tax level. This synthetic generator always produces one tax level with one item, but the schema keeps the grouping so it also fits invoices with several VAT rates",
+    "items": {
+      "type": "object",
+      "properties": {
+        "tax_level": {
+          "type": "enum",
+          "labels": ["0", "5", "8", "23"],
+          "description": "Tax level - VAT percentage rate printed in the `VAT [%]` column. Each item can have a separate tax level"
+        },
+        "items": {
+          "type": "array",
+          "description": "List of items for this tax level",
+          "items": {
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string",
+                "description": "Name of the item, printed in the `Nazwa` column"
+              },
+              "quantity": {
+                "type": "number",
+                "description": "Quantity of the item, printed in the `Ilosc` column"
+              },
+              "unit_of_measure": {
+                "type": "string",
+                "description": "Unit of measure of the item, printed in the `j.m.` column, e.g. `szt.`"
+              },
+              "unit_price": {
+                "type": "number",
+                "description": "Net unit price of the item, printed in the `Cena netto` column"
+              },
+              "item_net_amount": {
+                "type": "number",
+                "description": "Net amount for the item, printed in the `Wartosc netto` column"
+              },
+              "item_tax_amount": {
+                "type": "number",
+                "description": "Tax amount for the item, printed in the `Kwota VAT` column"
+              },
+              "item_gross_amount": {
+                "type": "number",
+                "description": "Gross amount for the item, printed in the `Wartosc brutto` column"
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

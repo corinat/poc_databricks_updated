@@ -1,0 +1,143 @@
+%PDF-1.4
+1 0 obj
+<< /Type /Catalog /Pages 2 0 R >>
+endobj
+2 0 obj
+<< /Type /Pages /Kids [3 0 R] /Count 1 >>
+endobj
+3 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 5 0 R /F2 6 0 R >> >> /Contents 4 0 R >>
+endobj
+4 0 obj
+<< /Length 3498 >>
+stream
+0.6 w
+0.15 g
+BT /F2 11 Tf 28 750 Td (Firma Testowa DataLake Sp. z o.o.) Tj ET
+BT /F1 8 Tf 28 735 Td (ul. Bialowieska 25/3, 54-445 Wroclaw) Tj ET
+BT /F1 8 Tf 28 722 Td (Tel.: 354-65-89, NIP: 111-111-11-11) Tj ET
+BT /F1 7 Tf 28 709 Td (Bank Testowy, konto: 10101010101010101010101010110100101) Tj ET
+0.85 g
+0.85 g
+390 724 194 23 re f
+0 g
+390 724 194 23 re S
+BT /F2 8 Tf 410 732 Td (Miejsce wystawienia:) Tj ET
+BT /F1 8 Tf 510 712 Td (Wroclaw) Tj ET
+0.85 g
+390 677 194 23 re f
+0 g
+390 677 194 23 re S
+BT /F2 7 Tf 410 685 Td (Data zakonczenia dostawy/uslug) Tj ET
+BT /F1 8 Tf 510 665 Td (2026-01-20) Tj ET
+0.85 g
+390 630 194 23 re f
+0 g
+390 630 194 23 re S
+BT /F2 8 Tf 430 638 Td (Data wystawienia:) Tj ET
+BT /F1 8 Tf 510 618 Td (2026-01-20) Tj ET
+0.15 g
+28 526 258 75 re S
+0.85 g
+28 578 258 23 re f
+0 g
+28 578 258 23 re S
+BT /F2 9 Tf 132 586 Td (Sprzedawca:) Tj ET
+BT /F1 8 Tf 34 562 Td (Firma Testowa DataLake Sp. z o.o.) Tj ET
+BT /F1 8 Tf 34 548 Td (ul. Bialowieska 25/3) Tj ET
+BT /F1 8 Tf 34 534 Td (54-445 Wroclaw, NIP: 111-111-11-11) Tj ET
+326 526 258 75 re S
+0.85 g
+326 578 258 23 re f
+0 g
+326 578 258 23 re S
+BT /F2 9 Tf 434 586 Td (Nabywca:) Tj ET
+BT /F1 8 Tf 332 562 Td (Leo Silva) Tj ET
+BT /F1 8 Tf 332 548 Td (Customer ID: 104) Tj ET
+BT /F1 8 Tf 332 534 Td (Kraj: ES) Tj ET
+BT /F2 15 Tf 212 490 Td (Faktura VAT  INV-0020  oryginal) Tj ET
+BT /F1 8 Tf 28 466 Td (Order ID: O-0020   Status: void) Tj ET
+1.0 g
+28 420 556 56 re f
+0 g
+28 420 556 56 re S
+0.6 w 28 420 m 28 476 l S
+BT /F2 6 Tf 31 438 Td (Lp) Tj ET
+0.6 w 55 420 m 55 476 l S
+BT /F2 6 Tf 58 438 Td (Nazwa) Tj ET
+0.6 w 220 420 m 220 476 l S
+BT /F2 6 Tf 223 438 Td (Ilosc) Tj ET
+0.6 w 270 420 m 270 476 l S
+BT /F2 6 Tf 273 438 Td (j.m.) Tj ET
+0.6 w 310 420 m 310 476 l S
+BT /F2 6 Tf 313 438 Td (Cena netto) Tj ET
+0.6 w 360 420 m 360 476 l S
+BT /F2 6 Tf 363 438 Td (VAT [%]) Tj ET
+0.6 w 410 420 m 410 476 l S
+BT /F2 6 Tf 413 438 Td (Wartosc netto) Tj ET
+0.6 w 480 420 m 480 476 l S
+BT /F2 6 Tf 483 438 Td (Kwota VAT) Tj ET
+0.6 w 530 420 m 530 476 l S
+BT /F2 6 Tf 533 438 Td (Wartosc brutto) Tj ET
+0.6 w 584 420 m 584 476 l S
+0.6 w 28 448 m 584 448 l S
+BT /F1 8 Tf 34 426 Td (1) Tj ET
+BT /F1 8 Tf 59 426 Td (SQL Stickers) Tj ET
+BT /F1 8 Tf 232 426 Td (1) Tj ET
+BT /F1 8 Tf 278 426 Td (szt.) Tj ET
+BT /F1 7 Tf 316 426 Td (5,00) Tj ET
+BT /F1 8 Tf 372 426 Td (23) Tj ET
+BT /F1 7 Tf 418 426 Td (5,00) Tj ET
+BT /F1 7 Tf 488 426 Td (1,15) Tj ET
+BT /F1 7 Tf 538 426 Td (6,15) Tj ET
+0.94 g
+284 321 300 72 re f
+0 g
+284 321 300 72 re S
+BT /F2 8 Tf 292 382 Td (wedlug stawki VAT) Tj ET
+BT /F2 8 Tf 458 382 Td (Wartosc netto) Tj ET
+BT /F2 8 Tf 522 382 Td (Kwota VAT) Tj ET
+BT /F1 8 Tf 292 360 Td (Podatek VAT 23%) Tj ET
+BT /F1 8 Tf 458 360 Td (5,00) Tj ET
+BT /F1 8 Tf 522 360 Td (1,15) Tj ET
+BT /F2 9 Tf 410 337 Td (Razem:) Tj ET
+BT /F1 8 Tf 478 337 Td (5,00) Tj ET
+BT /F1 8 Tf 532 337 Td (1,15) Tj ET
+0.85 g
+340 280 244 28 re f
+0 g
+340 280 244 28 re S
+BT /F2 11 Tf 348 290 Td (Razem do zaplaty:) Tj ET
+BT /F2 11 Tf 510 290 Td (6,15 USD) Tj ET
+BT /F2 9 Tf 28 285 Td (Pobranie DPD: 6,15 USD) Tj ET
+BT /F1 8 Tf 340 262 Td (Slownie: kwota syntetyczna do celow szkoleniowych) Tj ET
+28 92 258 105 re S
+326 92 258 105 re S
+BT /F2 9 Tf 112 182 Td (Wystawil\(a\):) Tj ET
+BT /F1 9 Tf 128 160 Td (Natalia Dudek) Tj ET
+BT /F2 9 Tf 420 182 Td (Odebral\(a\):) Tj ET
+BT /F1 9 Tf 440 160 Td (Szef) Tj ET
+BT /F1 6 Tf 54 78 Td (Podpis osoby upowaznionej do wystawienia faktury VAT) Tj ET
+BT /F1 6 Tf 352 78 Td (Podpis osoby upowaznionej do odbioru faktury VAT) Tj ET
+endstream
+endobj
+5 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>
+endobj
+6 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold >>
+endobj
+xref
+0 7
+0000000000 65535 f 
+0000000009 00000 n 
+0000000058 00000 n 
+0000000115 00000 n 
+0000000251 00000 n 
+0000003801 00000 n 
+0000003871 00000 n 
+trailer
+<< /Size 7 /Root 1 0 R >>
+startxref
+3946
+%%EOF

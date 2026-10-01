@@ -1,0 +1,5 @@
+currency_code,currency_name,decimal_places,is_reporting_currency
+PLN,Polish zloty,2,True
+EUR,Euro,2,False
+USD,US dollar,2,False
+GBP,Pound sterling,2,False

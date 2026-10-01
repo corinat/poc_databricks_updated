@@ -1,0 +1,5 @@
+This PoC simulates an ETL solution for a retail company, covering steps from source ingestion to reporting.
+
+Before you start: Read DATA_MODEL.md to understand the target tables and INGESTION_PLAN.md to understand the Bronze → Silver → Gold flow and which process creates each table.
+
+Setup: Use a Python uv environment and Databricks Asset Bundles (DABs) with a Databricks Free account. You have flexibility in the implementation, but Databricks/Spark should always be your first choice. Follow flows 01-07 in order and build the required Bronze, Silver, and Gold tables. Your implementation should be written primarily in Python/PySpark, using SQL only where appropriate.

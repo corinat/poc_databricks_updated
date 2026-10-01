@@ -1,0 +1,11 @@
+customer_name,parent_customer_id,country,customer_id
+Northwind Holding,,PL,201
+Contoso Holding,,GB,202
+Ava Stone,201,PL,101
+Noah Reed,201,DE,102
+Mia Chen,202,US,103
+Leo Silva,202,ES,104
+Zoe Khan,202,GB,105
+Ava Stone - Warsaw Branch,101,PL,111
+Ava Stone - Gdansk Branch,101,PL,112
+Mia Chen - New York Store,103,US,113
