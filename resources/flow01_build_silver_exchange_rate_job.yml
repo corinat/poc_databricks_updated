@@ -1,0 +1,54 @@
+# resources/flow01_build_silver_exchange_rate_job.yml
+# Flow 01 — Job B: build_silver_exchange_rate
+# Runs steps 2–4 of the flow.
+# Trigger: fires when bronze_currency changes (written by Job A, load_bronze_currency).
+# Note: dev mode pauses triggers. Unpause in the UI, or deploy without dev mode.
+
+resources:
+  jobs:
+    build_silver_exchange_rate:
+      name: build_silver_exchange_rate
+      trigger:
+        table_update:
+          table_names:
+            - ${var.catalog}.${resources.schemas.bronze_raw.name}.bronze_currency
+
+      # Job-level parameters: passed to every task, read in notebooks via dbutils.widgets.
+      parameters:
+        - name: catalog
+          default: ${var.catalog}
+        - name: bronze_schema
+          default: ${resources.schemas.bronze_raw.name}
+        - name: silver_schema
+          default: ${resources.schemas.silver.name}
+        - name: volume_name
+          default: ${resources.volumes.input_data.name}
+
+      tasks:
+        # Step 2: Bronze view over the historical CSV.
+        - task_key: create_bronze_exchange_rate_hist
+          notebook_task:
+            notebook_path: ../src/flow01/02_create_bronze_exchange_rate_hist.py
+          environment_key: default
+
+        # Step 3: does not need the view, only bronze_currency, so it runs in parallel with step 2.
+        - task_key: load_bronze_exchange_rate_current
+          notebook_task:
+            notebook_path: ../src/flow01/03_load_bronze_exchange_rate_current.py
+          environment_key: default
+
+        # Step 4: needs both Bronze sources, so it runs after steps 2 and 3.
+        - task_key: build_silver_exchange_rate
+          depends_on:
+            - task_key: create_bronze_exchange_rate_hist
+            - task_key: load_bronze_exchange_rate_current
+          notebook_task:
+            notebook_path: ../src/flow01/04_build_silver_exchange_rate.py
+          environment_key: default
+
+      environments:
+        - environment_key: default
+          spec:
+            environment_version: "6"
+      queue:
+        enabled: true
