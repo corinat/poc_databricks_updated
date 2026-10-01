@@ -6,18 +6,24 @@ resources:
   jobs:
     load_bronze_currency:
       name: load_bronze_currency
+
+      # Job-level parameters: passed to every task, read in notebooks via dbutils.widgets.
+      parameters:
+        - name: catalog
+          default: ${var.catalog}
+        - name: bronze_schema
+          default: ${resources.schemas.bronze_raw.name}
+        - name: volume_name
+          default: ${resources.volumes.input_data.name}
+
       tasks:
         - task_key: load_bronze_currency
           notebook_task:
             notebook_path: ../src/flow01/01_load_bronze_currency.py
-            base_parameters:
-              catalog: ${var.catalog}
-              bronze_schema: ${resources.schemas.bronze_raw.name}
-              volume_name: ${resources.volumes.input_data.name}
           environment_key: default
       environments:
         - environment_key: default
           spec:
-            client: "2"
+            environment_version: "6"
       queue:
         enabled: true

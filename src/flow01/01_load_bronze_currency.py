@@ -1,12 +1,11 @@
 # Databricks notebook source
 # /// script
 # [tool.databricks.environment]
-# environment_version = "2"
+# environment_version = "6"
 # ///
-from pyspark.sql.types import (
-    StructType, StructField, StringType, IntegerType, BooleanType,
-)
 from pyspark.sql.functions import col, current_timestamp
+from pyspark.sql.types import (BooleanType, IntegerType, StringType,
+                               StructField, StructType)
 
 # COMMAND ----------
 
@@ -18,7 +17,7 @@ currency_schema = StructType([
     StructField("is_reporting_currency", BooleanType(), True),
 ])
 
-# ── Parameters (passed by DABs job via base_parameters) ──
+# ── Parameters (passed by DABs job as job-level parameters) ──
 # DABs dev mode prefixes schema names with dev_<username>_.
 # Compute the correct default so interactive runs match the bundle.
 _user = spark.sql("SELECT current_user()").collect()[0][0].split("@")[0]

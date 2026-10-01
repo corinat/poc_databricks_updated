@@ -10,3 +10,4 @@ scratch/**
 **/!explorations/README.md
 requirements-dbc.txt
 .vscode/
+.python-version
