@@ -2,18 +2,17 @@
 resources:
   schemas:
     bronze_raw:
-      catalog_name: $(var.cayalog)
+      catalog_name: ${var.catalog}
       name: bronze_raw
     silver:
-      catalog_name: $(var.catalog)
+      catalog_name: ${var.catalog}
       name: silver
     gold:
-      catalog_name: $(var.catalog)
+      catalog_name: ${var.catalog}
       name: gold
-
-volumes:
-  input_data:
-    catalog_name: $(var.catalog)
-    schema_name: ${resources.schemas.bronze_raw.name}
-    name: input_data
-    volume_type: MANAGED
+  volumes:
+    input_data:
+      catalog_name: ${var.catalog}
+      schema_name: ${resources.schemas.bronze_raw.name}
+      name: input_data
+      volume_type: MANAGED
