@@ -1,0 +1,23 @@
+# resources/flow01_jobs.yml
+# Flow 01 — Job A: load_bronze_currency
+# Manual trigger: run when someone approves a currency change.
+
+resources:
+  jobs:
+    load_bronze_currency:
+      name: load_bronze_currency
+      tasks:
+        - task_key: load_bronze_currency
+          notebook_task:
+            notebook_path: ../src/flow01/01_load_bronze_currency.py
+            base_parameters:
+              catalog: ${var.catalog}
+              bronze_schema: ${resources.schemas.bronze_raw.name}
+              volume_name: ${resources.volumes.input_data.name}
+          environment_key: default
+      environments:
+        - environment_key: default
+          spec:
+            client: "2"
+      queue:
+        enabled: true
