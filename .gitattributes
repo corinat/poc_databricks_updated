@@ -1,0 +1,13 @@
+# Store text files with LF line endings, on every OS (macOS, WSL, Windows).
+# This overrides core.autocrlf, so files look the same on every machine.
+* text=auto eol=lf
+
+# Source data: keep byte-for-byte as delivered, never convert line endings.
+# (The invoice PDFs contain no NUL bytes, so git would otherwise treat them as text.)
+data/** -text
+
+# Binary formats, wherever they appear.
+*.pdf     binary
+*.parquet binary
+*.xlsx    binary
+*.zip     binary
