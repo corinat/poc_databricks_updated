@@ -1,13 +1,16 @@
-# resources/flow01_build_silver_exchange_rate_job.yml
+# resources/flow01_exchange_rate_job.job.yml
 # Flow 01 — Job B: build_silver_exchange_rate
 # Runs steps 2–4 of the flow.
-# Trigger: fires when bronze_currency changes (written by Job A, load_bronze_currency).
+# Trigger: table update trigger on bronze_currency. When Job A (load_bronze_currency)
+# writes bronze_currency, this job starts automatically; no manual run needed.
 # Note: dev mode pauses triggers by default; pause_status below keeps this one active in every target.
 
 resources:
   jobs:
     build_silver_exchange_rate:
       name: build_silver_exchange_rate
+
+      # Table update trigger: starts this job automatically whenever bronze_currency changes.
       trigger:
         pause_status: UNPAUSED
         table_update:
