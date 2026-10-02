@@ -7,7 +7,10 @@
 #
 # - Combine bronze_exchange_rate_hist (CSV view) and bronze_exchange_rate_current (API).
 # - Keep all columns from Bronze.
-# - Deduplicate: one row per effectiveDate + code, latest ingested_at wins (QUALIFY).
+# - Deduplicate: one row per effectiveDate + code (QUALIFY).
+#   "Latest" (flow 06: "Define what latest means"): the NBP API row wins over the
+#   historical CSV row, because the API is the bank's own published source.
+#   Within the same source, the latest ingested_at wins.
 # - Write mode: replace only the changed date(s), not the whole table
 #   (INSERT INTO ... REPLACE USING, Databricks Runtime 17.2+ for unpartitioned tables).
 
@@ -37,15 +40,20 @@ all_columns_sql = f"{source_columns_sql}, source_file, ingested_at"
 # COMMAND ----------
 
 # ── Combine historical and current data, deduplicate with QUALIFY ──
-# One row per effectiveDate + code, latest ingested_at wins.
+# One row per effectiveDate + code.
+# source_priority: 1 = API (wins), 2 = historical CSV. Ties within a source: latest ingested_at.
+# source_priority is only used for ordering and is not written to Silver.
 deduplicated_sql = f"""
 SELECT {all_columns_sql}
 FROM (
-    SELECT {all_columns_sql} FROM {hist_view}
+    SELECT {all_columns_sql}, 1 AS source_priority FROM {current_table}
     UNION ALL
-    SELECT {all_columns_sql} FROM {current_table}
+    SELECT {all_columns_sql}, 2 AS source_priority FROM {hist_view}
 ) AS combined
-QUALIFY row_number() OVER (PARTITION BY effectiveDate, code ORDER BY ingested_at DESC) = 1
+QUALIFY row_number() OVER (
+    PARTITION BY effectiveDate, code
+    ORDER BY source_priority, ingested_at DESC
+) = 1
 """
 
 # COMMAND ----------

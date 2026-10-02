@@ -2,6 +2,7 @@
 # See https://docs.databricks.com/dev-tools/bundles/index.html for documentation.
 bundle:
   name: poc_project
+  engine: direct
 
 include:
   - resources/*.yml
@@ -23,4 +24,14 @@ targets:
     workspace:
       host: https://dbc-4fa91c2f-fd86.cloud.databricks.com # replace with your Workspace URL
 
- 
+  test:
+    workspace:
+      host: https://dbc-4fa91c2f-fd86.cloud.databricks.com
+    variables:
+      catalog: poc_test
+
+  prod:
+    workspace:
+      host: https://dbc-4fa91c2f-fd86.cloud.databricks.com
+    variables:
+      catalog: poc
