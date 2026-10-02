@@ -91,9 +91,13 @@ databricks bundle deploy -t dev
 databricks bundle run load_bronze_currency -t dev
 ```
 
-Running `load_bronze_currency` writes `bronze_currency`, which triggers `build_silver_exchange_rate`.
+`load_bronze_currency` writes `bronze_currency`, and the table update trigger then starts `build_silver_exchange_rate` in every target. Table update triggers are checked periodically, so the run can start shortly after the first job finishes rather than immediately.
 
-In development mode, triggers are paused. Unpause the trigger on `build_silver_exchange_rate` in the job settings, or run it directly with `databricks bundle run build_silver_exchange_rate -t dev`.
+Development mode normally pauses all job triggers. The trigger in [flow01_exchange_rate_job.job.yml](../../resources/flow01_exchange_rate_job.job.yml) sets `pause_status: UNPAUSED` explicitly, so it stays active in dev too. (A target-level preset `trigger_pause_status: UNPAUSED` is rejected by the CLI in development mode.) To run the second job without waiting for the trigger:
+
+```bash
+databricks bundle run build_silver_exchange_rate -t dev
+```
 
 **First deploy to a new catalog (test, prod):** Databricks checks that the trigger table exists when it creates `build_silver_exchange_rate`. On an empty catalog, run the steps in this order:
 

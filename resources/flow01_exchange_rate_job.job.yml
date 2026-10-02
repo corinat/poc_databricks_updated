@@ -2,13 +2,14 @@
 # Flow 01 — Job B: build_silver_exchange_rate
 # Runs steps 2–4 of the flow.
 # Trigger: fires when bronze_currency changes (written by Job A, load_bronze_currency).
-# Note: dev mode pauses triggers. Unpause in the UI, or deploy without dev mode.
+# Note: dev mode pauses triggers by default; pause_status below keeps this one active in every target.
 
 resources:
   jobs:
     build_silver_exchange_rate:
       name: build_silver_exchange_rate
       trigger:
+        pause_status: UNPAUSED
         table_update:
           table_names:
             - ${var.catalog}.${resources.schemas.bronze_raw.name}.bronze_currency
