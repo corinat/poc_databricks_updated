@@ -83,15 +83,17 @@ parsed AS (
     SELECT
         currency_code,
         CASE
-            WHEN response.status_code <> 200 THEN
-                raise_error(concat('NBP API returned ', response.status_code,
-                                   ' for ', currency_code, ': ', response.text))
-        END AS _status_check,
-        from_json(
-            response.text,
-            '`table` STRING, currency STRING, code STRING,
-             rates ARRAY<STRUCT<no: STRING, effectiveDate: DATE, mid: DECIMAL(18,6)>>'
-        ) AS payload
+            WHEN response.status_code = 200 THEN
+                from_json(
+                            response.text,
+                            '`table` STRING, currency STRING, code STRING,
+                            rates ARRAY<STRUCT<no: STRING, effectiveDate: DATE, mid: DECIMAL(18,6)>>'
+            )
+            ELSE raise_error(concat(
+                'NBP API returned ', response.status_code,
+                ' for ', currency_code, ': ', response.text
+            ))
+        END AS payload
     FROM responses
 )
 SELECT
@@ -104,8 +106,7 @@ SELECT
     concat('{NBP_RATES_URL}/', currency_code, '/?format=json')      AS source_file,
     current_timestamp()                                             AS ingested_at
 FROM parsed
-LATERAL VIEW explode(payload.rates) AS rate
-WHERE _status_check IS NULL
+LATERAL VIEW explode_outer(payload.rates) AS rate
 """)
 
 # COMMAND ----------
