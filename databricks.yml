@@ -23,15 +23,18 @@ targets:
     default: true
     workspace:
       host: https://dbc-4fa91c2f-fd86.cloud.databricks.com # replace with your Workspace URL
+      profile: dev
 
   test:
     workspace:
       host: https://dbc-4fa91c2f-fd86.cloud.databricks.com
+      profile: test
     variables:
       catalog: poc_test
 
   prod:
     workspace:
       host: https://dbc-4fa91c2f-fd86.cloud.databricks.com
+      profile: prod
     variables:
       catalog: poc
