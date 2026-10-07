@@ -11,8 +11,11 @@ resources:
       name: load_bronze_seller
 
       schedule:
+        # 02:00 UTC every day. UTC does not observe daylight saving, so the run
+        # keeps a fixed interval all year; in Europe/Warsaw this lands at 03:00
+        # in winter and 04:00 in summer.
         quartz_cron_expression: "0 0 2 * * ?"
-        timezone_id: Europe/Warsaw
+        timezone_id: UTC
         pause_status: UNPAUSED
 
       # Job-level parameters: passed to every task, read in notebooks via dbutils.widgets.
