@@ -15,12 +15,14 @@ Requirements: [flows/flows/01_currency_exchange_rate.md](../../flows/flows/01_cu
 
 All objects live in the catalog chosen by the bundle target (`poc_dev`, `poc_test`, `poc`). Bronze objects are in schema `bronze_raw`, Silver in `silver`. In the `dev` target, development mode prefixes schema names with `dev_<user>_`.
 
+Solid arrows are data lineage, the dashed arrow is a parameter dependency: `bronze_currency` decides which currencies are called, but none of its columns reach Silver.
+
 ```mermaid
 flowchart LR
     CSV1[currencies.csv] --> B1[bronze_currency]
     CSV2[exchange_rates_historical.csv] --> V1[view: bronze_exchange_rate_hist]
-    B1 -->|codes except PLN| API[NBP API]
-    API --> B2[bronze_exchange_rate_current]
+    API[NBP API] --> B2[bronze_exchange_rate_current]
+    B1 -.->|foreign currency codes| B2
     V1 --> S1[silver_exchange_rate]
     B2 --> S1
 ```
@@ -56,7 +58,7 @@ The catalog, schema and volume names are job-level parameters, filled in by the 
 
 ### Step 3 — `bronze_exchange_rate_current`
 
-- Reads the currency codes from `bronze_currency`, excluding PLN.
+- Reads the currency codes from `bronze_currency`, taking the ones marked `is_reporting_currency = false` (so PLN is left out in the current file).
 - Calls the NBP API once per currency with the Databricks `http_request()` SQL function, through a Unity Catalog HTTP connection `nbp_api`. The notebook creates the connection if it does not exist.
 - Endpoint: current mid rate from table A, `https://api.nbp.pl/api/exchangerates/rates/A/{code}/?format=json`.
 - The JSON is parsed with an explicit schema into exactly the same columns and types as the historical view, so Silver can combine both directly.
@@ -79,6 +81,7 @@ The catalog, schema and volume names are job-level parameters, filled in by the 
 | NBP endpoint | Per-currency current rate, table A | The flow says "call the NBP API" without an address. Table A holds mid rates, matching the historical file. |
 | API call | `http_request()` + UC HTTP connection | Flow step 5: prefer a native Databricks solution over an external package. |
 | Rate type | `DECIMAL(18,6)` | Exact arithmetic for money; NBP returns up to 4 decimals for these currencies. |
+| Which currencies to call | `is_reporting_currency = false`, not a literal `'PLN'` | The flow says "every currency except PLN". The flag in `currencies.csv` marks exactly that row, so the rule is read from the data instead of being hardcoded, and a change of reporting currency needs no code change. NBP publishes foreign rates against PLN, so there is no endpoint for the reporting currency itself. The condition is stated directly rather than defaulting a missing flag, so only currencies the file explicitly marks `false` are called. |
 | `ingested_at` in the view | File modification time | A view has no load moment of its own. |
 | Which row wins on a duplicate | **NBP API first**, then latest `ingested_at` | Flow 06 asks to "define what latest means". The API is the bank's own published source; the CSV is a copy. |
 | Silver column names | Same as Bronze | No renaming required by the flow; renaming to the data model names can happen in Gold. |
