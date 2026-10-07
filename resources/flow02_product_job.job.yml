@@ -1,0 +1,41 @@
+# resources/flow02_product_job.job.yml
+# Flow 02 — Job A: load_bronze_product
+# Trigger: file arrival on the products_excel folder of the volume, where every
+# product delivery lands. A trigger path cannot contain a wildcard and the
+# trigger has no extension filter, so scoping it to a folder of its own is what
+# keeps unrelated uploads from starting this job.
+# Note: dev mode pauses triggers by default; pause_status below keeps this one
+# active in every target.
+
+resources:
+  jobs:
+    load_bronze_product:
+      name: load_bronze_product
+
+      trigger:
+        pause_status: UNPAUSED
+        file_arrival:
+          url: /Volumes/${var.catalog}/${resources.schemas.bronze_raw.name}/${resources.volumes.input_data.name}/data/products_excel/
+
+      # Job-level parameters: passed to every task, read in notebooks via dbutils.widgets.
+      parameters:
+        - name: catalog
+          default: ${var.catalog}
+        - name: bronze_schema
+          default: ${resources.schemas.bronze_raw.name}
+        - name: volume_name
+          default: ${resources.volumes.input_data.name}
+
+      tasks:
+        - task_key: load_bronze_product
+          notebook_task:
+            notebook_path: ../src/flow02/01_load_bronze_product.py
+          environment_key: default
+
+      environments:
+        - environment_key: default
+          spec:
+            # No dependencies: the Excel reader is native to the runtime.
+            environment_version: "6"
+      queue:
+        enabled: true

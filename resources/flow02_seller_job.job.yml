@@ -1,0 +1,41 @@
+# resources/flow02_seller_job.job.yml
+# Flow 02 — Job B: load_bronze_seller
+# Trigger: nightly schedule. The Delta folder is not pushed to, so there is no
+# event to react to and the job polls instead.
+# Note: dev mode pauses schedules by default; pause_status below keeps this one
+# active in every target, so the trigger can be demonstrated in dev.
+
+resources:
+  jobs:
+    load_bronze_seller:
+      name: load_bronze_seller
+
+      schedule:
+        # 02:00 UTC every day. UTC does not observe daylight saving, so the run
+        # keeps a fixed interval all year; in Europe/Warsaw this lands at 03:00
+        # in winter and 04:00 in summer.
+        quartz_cron_expression: "0 0 2 * * ?"
+        timezone_id: UTC
+        pause_status: UNPAUSED
+
+      # Job-level parameters: passed to every task, read in notebooks via dbutils.widgets.
+      parameters:
+        - name: catalog
+          default: ${var.catalog}
+        - name: bronze_schema
+          default: ${resources.schemas.bronze_raw.name}
+        - name: volume_name
+          default: ${resources.volumes.input_data.name}
+
+      tasks:
+        - task_key: load_bronze_seller
+          notebook_task:
+            notebook_path: ../src/flow02/02_load_bronze_seller.py
+          environment_key: default
+
+      environments:
+        - environment_key: default
+          spec:
+            environment_version: "6"
+      queue:
+        enabled: true
