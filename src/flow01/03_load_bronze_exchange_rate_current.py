@@ -5,7 +5,9 @@
 # ///
 # Flow 01, step 3: Bronze table with the current exchange rates from the NBP API.
 #
-# - Currency list comes from bronze_currency, every currency except PLN.
+# - Currency list comes from bronze_currency: every currency marked
+#   is_reporting_currency = false (so PLN is left out today). NBP publishes
+#   foreign rates against PLN, so there is no endpoint for it.
 # - Same columns and types as the view bronze_exchange_rate_hist (step 2).
 # - Write mode: full overwrite. The table only holds the latest snapshot.
 #
@@ -54,14 +56,17 @@ OPTIONS (
 
 # COMMAND ----------
 
-# ── Call the NBP API once per currency (except PLN) and parse the JSON ──
+# ── Call the NBP API once per foreign currency and parse the JSON ──
+# The reporting currency is excluded through the is_reporting_currency flag
+# rather than a hardcoded 'PLN'. Only currencies explicitly marked false are
+# called; the flag is not defaulted when it is missing.
 # Same columns and types as bronze_exchange_rate_hist.
 # A non-200 response stops the task, like raise_for_status() in the previous version.
 df = spark.sql(f"""
 WITH currencies AS (
-    SELECT DISTINCT currency_code
+    SELECT currency_code
     FROM {currency_table}
-    WHERE currency_code <> 'PLN'
+    WHERE is_reporting_currency = false
 ),
 responses AS (
     SELECT
