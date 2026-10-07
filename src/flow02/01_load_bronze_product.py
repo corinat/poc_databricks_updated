@@ -5,11 +5,11 @@
 # ///
 # Flow 02, job A: Bronze table with the product catalog from the Excel file.
 #
-# - Source: every .xlsx file in the data folder, read as-is. Column names stay
-#   as the sheet holds them and every column lands as STRING; nothing is cast.
-#   Typing and renaming to the data model happen downstream.
+# - Source: every .xlsx file in the products_excel folder, read as-is. Column
+#   names stay as the sheet holds them and every column lands as STRING;
+#   nothing is cast. Typing and renaming to the data model happen downstream.
 # - Write mode: append, through Auto Loader. A new file is a new delivery.
-# - Trigger: file arrival on the data folder of the volume.
+# - Trigger: file arrival on the products_excel folder of the volume.
 #
 # Auto Loader with the native Excel reader (cloudFiles.format = "excel",
 # Databricks Runtime 17.1+). No external package: flow step 5 asks to check
@@ -21,11 +21,10 @@
 # already processed, so each run picks up only new ones, however they are
 # named, and several deliveries waiting at once are handled in one batch.
 #
-# All sources share the data folder, so the trigger fires on every upload to
-# it, not just on a workbook. That costs nothing: pathGlobFilter keeps this
-# job to .xlsx files, and a run that finds no new workbook writes nothing.
-# pathGlobFilter is also the only place that filtering can happen, since the
-# trigger itself has no extension option.
+# Deliveries land in a folder of their own, so the trigger starts this job only
+# for product files. pathGlobFilter is still set: the trigger has no extension
+# option of its own, so anything else dropped in the folder is ignored here
+# rather than failing the read.
 
 # COMMAND ----------
 from pyspark.sql.functions import col, current_timestamp
@@ -48,12 +47,11 @@ volume_name = dbutils.widgets.get("volume_name")
 
 volume_root = f"/Volumes/{catalog}/{bronze_schema}/{volume_name}"
 
-# All source files share one data folder, so the trigger on it fires for every
-# upload. pathGlobFilter below keeps this job to .xlsx files, and Auto Loader
-# writes nothing when a run finds no new workbook.
+# Product workbooks land in their own folder, which is also what the file
+# arrival trigger watches, so the job starts only on a product delivery.
 # The checkpoint sits outside data/, so writing to it never looks like a new
 # arrival to the trigger.
-source_dir = f"{volume_root}/data"
+source_dir = f"{volume_root}/data/products_excel"
 checkpoint_path = f"{volume_root}/_checkpoints/bronze_product_excel"
 
 table_name = f"{catalog}.{bronze_schema}.bronze_product"

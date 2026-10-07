@@ -27,8 +27,8 @@ Defined in [resources/flow02_product_job.job.yml](../../resources/flow02_product
 
 | Job | Trigger | Why |
 |---|---|---|
-| `load_bronze_product` | file arrival on `data/` | The catalog only changes when a new file lands, so react to the event |
-| `load_bronze_seller` | schedule, nightly 02:00 Europe/Warsaw | Nothing pushes to the Delta folder, so poll instead |
+| `load_bronze_product` | file arrival on `data/products_excel/` | The catalog only changes when a new file lands, so react to the event |
+| `load_bronze_seller` | schedule, nightly 02:00 UTC | Nothing pushes to the Delta folder, so poll instead |
 
 Development mode normally pauses triggers and schedules. Both job files set `pause_status: UNPAUSED` explicitly so the triggers stay active in dev too.
 
@@ -58,21 +58,20 @@ Development mode normally pauses triggers and schedules. Both job files set `pau
 | Incremental loading | Auto Loader, not a plain read | The file arrival trigger does not pass the arriving file name to the job and its path cannot contain a wildcard, so the job has to work out for itself what is new. Auto Loader's checkpoint does that, which is what makes "a new file is a new delivery" hold for arbitrary file names. A plain read of the folder would re-ingest every past delivery on each run. |
 | `.xlsx` filtering | `pathGlobFilter` on the reader | The trigger has no extension filter, so the only available filtering is reader-side. |
 | Product column types | All `STRING`, nothing cast | The flow says read the file as-is. The sheet's `unit_price` has to become a decimal and `unit_price` → `list_price` has to be renamed for `DIM_PRODUCT`; both happen downstream. |
-| Checkpoint location | `_checkpoints/bronze_product_excel` in the volume, outside `data/` | Writing the checkpoint must not look like a new arrival to the trigger watching `data/`. The `_excel` suffix names the source format, so the folder is identifiable once other flows add checkpoints of their own. |
+| Checkpoint location | `_checkpoints/bronze_product_excel` in the volume, outside `data/` | Writing the checkpoint must not look like a new arrival to the trigger watching `data/products_excel/`. The `_excel` suffix names the source format, so the folder is identifiable once other flows add checkpoints of their own. |
 | `unit_of_measure` | Not populated | `DIM_PRODUCT` has the column but the sheet has no source for it. |
 | Seller read format | Delta, not Parquet | The folder has a transaction log and is at version 1: an overwrite tombstoned the version 0 part file, which is still on disk. The Delta reader returns 1 row; a Parquet read of the same folder returns 2. |
 | Seller table type | Managed | Unity Catalog does not allow an external table here: "You can't define a table on any data files or directories within a volume." A real external table needs an external location over cloud storage, which Free Edition does not have. The practice external table in the flow doc is therefore not possible; `SELECT * FROM delta.'<path>'` reads the files in place instead. |
 | `source_file` for sellers | The folder name, `sellers_delta` | Part file names are an internal Delta detail and change on every overwrite. |
-| Product file location | the shared `data/` folder, no separate subfolder | Keeps the layout flow 01 describes: all source files in one folder. The trigger therefore fires on any upload to `data/`, which is harmless now that Auto Loader decides what is new — a run without a new workbook writes nothing. The cost is some no-op runs in the job history. |
-| Recursive matching | Accepted | `pathGlobFilter` matches the file name at any depth, so an `.xlsx` placed in a subfolder of `data/` would also be ingested into `bronze_product`. The folder holds one workbook today, so this is only worth knowing if Excel files are added elsewhere. |
+| Product file location | `data/products_excel/`, its own folder | A file arrival trigger cannot filter by extension and its path cannot hold a wildcard, so a folder is the only way to scope it. Watching the shared `data/` folder instead would start this job on every unrelated upload — harmless, since Auto Loader would find no new workbook and write nothing, but it would fill the run history with no-op runs and spend compute on a quota-limited workspace. Every product delivery is therefore expected to land in this folder. |
 | Quarantine column | Not added | [docs/INGESTION_PLAN.md](../../docs/INGESTION_PLAN.md) lists quarantine status for Bronze tables, but data quality is flow 06. |
 
 ## Deploy and run
 
-Both sources sit in the shared `data/` folder, which is also what the product trigger watches. Any `.xlsx` file name works — Auto Loader tracks which ones it has already read:
+Product workbooks go in `data/products_excel/`, which is also what the trigger watches. Any `.xlsx` file name works — Auto Loader tracks which ones it has already read:
 
 ```
-/Volumes/<catalog>/bronze_raw/input_data/data/products_excel.xlsx
+/Volumes/<catalog>/bronze_raw/input_data/data/products_excel/products_excel.xlsx
 /Volumes/<catalog>/bronze_raw/input_data/data/sellers_delta/
 /Volumes/<catalog>/bronze_raw/input_data/_checkpoints/bronze_product_excel   (created by the job)
 ```
@@ -83,7 +82,7 @@ databricks bundle run load_bronze_product -t dev
 databricks bundle run load_bronze_seller -t dev
 ```
 
-Uploading a workbook to `data/` starts `load_bronze_product` on its own. File arrival triggers are checked periodically, so the run starts shortly after the upload rather than immediately. Any other upload to `data/` starts it too and the run does nothing, which is the trade-off for keeping one shared source folder.
+Uploading a workbook to `data/products_excel/` starts `load_bronze_product` on its own. File arrival triggers are checked periodically, so the run starts shortly after the upload rather than immediately. Uploads to the rest of `data/` do not start it.
 
 To re-ingest a delivery that was already processed, delete the checkpoint folder — Auto Loader will not read the same file twice otherwise.
 

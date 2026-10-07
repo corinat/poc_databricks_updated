@@ -1,10 +1,9 @@
 # resources/flow02_product_job.job.yml
 # Flow 02 — Job A: load_bronze_product
-# Trigger: file arrival on the data folder of the volume, where all sources are
-# uploaded. A trigger path cannot contain a wildcard and the trigger has no
-# extension filter, so this job starts on any upload to data/ — a CSV or a
-# parquet file included. That is harmless: the notebook ingests with Auto
-# Loader and a run that finds no new .xlsx writes nothing.
+# Trigger: file arrival on the products_excel folder of the volume, where every
+# product delivery lands. A trigger path cannot contain a wildcard and the
+# trigger has no extension filter, so scoping it to a folder of its own is what
+# keeps unrelated uploads from starting this job.
 # Note: dev mode pauses triggers by default; pause_status below keeps this one
 # active in every target.
 
@@ -16,7 +15,7 @@ resources:
       trigger:
         pause_status: UNPAUSED
         file_arrival:
-          url: /Volumes/${var.catalog}/${resources.schemas.bronze_raw.name}/${resources.volumes.input_data.name}/data/
+          url: /Volumes/${var.catalog}/${resources.schemas.bronze_raw.name}/${resources.volumes.input_data.name}/data/products_excel/
 
       # Job-level parameters: passed to every task, read in notebooks via dbutils.widgets.
       parameters:
