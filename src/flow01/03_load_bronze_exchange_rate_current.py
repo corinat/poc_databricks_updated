@@ -85,14 +85,15 @@ parsed AS (
         CASE
             WHEN response.status_code = 200 THEN
                 from_json(
-                            response.text,
-                            '`table` STRING, currency STRING, code STRING,
-                            rates ARRAY<STRUCT<no: STRING, effectiveDate: DATE, mid: DECIMAL(18,6)>>'
-            )
-            ELSE raise_error(concat(
-                'NBP API returned ', response.status_code,
-                ' for ', currency_code, ': ', response.text
-            ))
+                    response.text,
+                    '`table` STRING, currency STRING, code STRING,
+                    rates ARRAY<STRUCT<no: STRING, effectiveDate: DATE, mid: DECIMAL(18,6)>>'
+                )
+            ELSE
+                raise_error(concat(
+                    'NBP API returned ', response.status_code,
+                    ' for ', currency_code, ': ', response.text
+                ))
         END AS payload
     FROM responses
 )

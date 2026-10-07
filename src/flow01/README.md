@@ -62,7 +62,8 @@ The catalog, schema and volume names are job-level parameters, filled in by the 
 - Calls the NBP API once per currency with the Databricks `http_request()` SQL function, through a Unity Catalog HTTP connection `nbp_api`. The notebook creates the connection if it does not exist.
 - Endpoint: current mid rate from table A, `https://api.nbp.pl/api/exchangerates/rates/A/{code}/?format=json`.
 - The JSON is parsed with an explicit schema into exactly the same columns and types as the historical view, so Silver can combine both directly.
-- A non-200 response stops the task.
+- A non-200 response stops the task: the status check and the JSON parse are the two branches of one `CASE`, so the parsed column either holds a payload or raises.
+- The rates array is flattened with `explode_outer`, not `explode`. A 200 response that parsed to no rates therefore lands as a row with NULL `no`, `effectiveDate` and `mid` instead of disappearing. NBP answers an unknown code with 404 rather than an empty 200, so this is a safety net rather than an expected path — but it means a malformed response is visible in Bronze for flow 06 to catch, rather than a currency silently going missing.
 - `source_file` is the API URL, `ingested_at` is the load time.
 - Full overwrite: the table only holds the latest snapshot.
 
@@ -71,8 +72,8 @@ The catalog, schema and volume names are job-level parameters, filled in by the 
 - Combines the view and the API table with `UNION ALL`. All Bronze columns are kept.
 - No cleaning: the source data has no empty values, extra spaces, invalid rates or duplicate rows.
 - Deduplication with `QUALIFY`: one row per `effectiveDate` + `code`.
-- Changed dates are found by comparing the deduplicated data with Silver (`EXCEPT` on the source columns). Tracking columns are not compared, so a new API load time alone does not count as a change.
-- Only the changed dates are rewritten, with `INSERT INTO ... REPLACE USING (effectiveDate)`. The first run creates the table and loads everything.
+- Changed dates are found by comparing the deduplicated data with Silver (`EXCEPT` on the source columns plus `source_file`). `ingested_at` is left out, so a new API load time alone does not count as a change; `source_file` is included, so a row whose winning source switches between the CSV and the API is detected even when the rate itself is identical.
+- Only the changed dates are rewritten, with `INSERT INTO ... REPLACE USING (effectiveDate)`. This needs Databricks Runtime 17.2+ for unpartitioned tables. The first run creates the table and loads everything.
 
 ## Design decisions not specified in the requirements
 
