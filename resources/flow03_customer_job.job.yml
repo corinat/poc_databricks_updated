@@ -1,0 +1,53 @@
+# resources/flow03_customer_job.job.yml
+# Flow 03 — Job A: load_bronze_customer
+# Trigger: file arrival on the customer_data folder of the volume, where
+# customer batches are uploaded. A trigger path cannot contain a wildcard and
+# the trigger has no extension filter, so the folder is scoped to customer
+# batches. The notebook loads only batches that are not in the table yet, so a
+# run started by one upload does not re-append earlier deliveries.
+# Note: dev mode pauses triggers by default; pause_status below keeps this one
+# active in every target.
+
+resources:
+  jobs:
+    load_bronze_customer:
+      name: load_bronze_customer
+
+      trigger:
+        pause_status: UNPAUSED
+        file_arrival:
+          url: /Volumes/${var.catalog}/${resources.schemas.bronze_raw.name}/${resources.volumes.input_data.name}/data/customer_data/
+
+      # Job-level parameters: passed to every task, read in notebooks via dbutils.widgets.
+      parameters:
+        - name: catalog
+          default: ${var.catalog}
+        - name: bronze_schema
+          default: ${resources.schemas.bronze_raw.name}
+        - name: silver_schema
+          default: ${resources.schemas.silver.name}
+        - name: volume_name
+          default: ${resources.volumes.input_data.name}
+
+      tasks:
+        # Step 1: land the new batches in Bronze.
+        - task_key: load_bronze_customer
+          notebook_task:
+            notebook_path: ../src/flow03/01_load_bronze_customer.py
+          environment_key: default
+
+        # Step 2: rebuild Silver from everything in Bronze. Runs only if step 1
+        # succeeded, so a batch that failed to load is not silently left out.
+        - task_key: build_silver_customer
+          depends_on:
+            - task_key: load_bronze_customer
+          notebook_task:
+            notebook_path: ../src/flow03/02_build_silver_customer.py
+          environment_key: default
+
+      environments:
+        - environment_key: default
+          spec:
+            environment_version: "6"
+      queue:
+        enabled: true
