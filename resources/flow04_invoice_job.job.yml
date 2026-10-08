@@ -1,0 +1,95 @@
+# resources/flow04_invoice_job.job.yml
+# Flow 04 — Job: load_bronze_invoice
+# Trigger: file arrival on the invoices folder, which holds invoice PDFs only.
+# Flow 04 does not specify a trigger; an upload is the event that produces new
+# invoices, and step 1 skips what is already parsed, so a run that fires with
+# nothing new costs one short listing and no parse iterations.
+# Note: dev mode pauses triggers by default; pause_status below keeps this one
+# active in every target.
+#
+# Task graph: list the PDFs still to parse, then a For Each that runs the parse
+# notebook once per file. Silver is not built yet.
+
+resources:
+  jobs:
+    load_bronze_invoice:
+      name: load_bronze_invoice
+
+      trigger:
+        pause_status: UNPAUSED
+        file_arrival:
+          url: /Volumes/${var.catalog}/${resources.schemas.bronze_raw.name}/${resources.volumes.input_data.name}/data/invoices/
+          # Wait for a bulk upload to settle before firing, so dropping in
+          # thirty PDFs gives one run of thirty rather than several runs
+          # picking up stragglers. Each extra run is another startup and
+          # another scan of bronze_invoice.
+          wait_after_last_change_seconds: 60
+
+      # One run at a time. Step 1 decides what to parse by reading source_file
+      # from bronze_invoice, and those rows appear only as each For Each
+      # iteration commits. Two overlapping runs would mean the second lists
+      # while the first is still parsing, sees a partly written table, and
+      # parses the same files again. Queued runs list after the previous run
+      # has committed everything.
+      max_concurrent_runs: 1
+
+      # Job-level parameters: passed to every task, read in notebooks via dbutils.widgets.
+      parameters:
+        - name: catalog
+          default: ${var.catalog}
+        - name: bronze_schema
+          default: ${resources.schemas.bronze_raw.name}
+        - name: silver_schema
+          default: ${resources.schemas.silver.name}
+        - name: volume_name
+          default: ${resources.volumes.input_data.name}
+        # Absolute path to the extraction schema in the deployed bundle.
+        # workspace.file_path resolves per target, so this works in dev, test
+        # and prod without the notebook assuming a working directory.
+        - name: schema_path
+          default: ${workspace.file_path}/docs/invoice_extraction_schema.json
+
+      tasks:
+        # Step 1: which PDFs are not in bronze_invoice yet. Publishes the list
+        # as the task value read by the For Each below.
+        - task_key: list_invoice_files
+          notebook_task:
+            notebook_path: ../src/flow04/01_list_invoice_files.py
+          environment_key: default
+
+        # Step 2: one parse run per file.
+        # concurrency: parsing one invoice takes roughly 20 seconds, almost all
+        # of it waiting on ai_parse_document and ai_extract, so the files are
+        # processed in parallel. Kept low to stay clear of AI function rate
+        # limits; raise it if the runs are not being throttled.
+        - task_key: for_each_invoice
+          depends_on:
+            - task_key: list_invoice_files
+          for_each_task:
+            inputs: "{{tasks.list_invoice_files.values.invoice_files}}"
+            concurrency: 4
+            task:
+              task_key: parse_invoice_file
+              notebook_task:
+                notebook_path: ../src/flow04/02_parse_invoice_file.py
+                base_parameters:
+                  # The single element this iteration was given.
+                  pdf_path: "{{input}}"
+              environment_key: default
+
+        # Step 3: rebuild the Silver header table from everything in Bronze.
+        # Runs only if every parse iteration succeeded, so a failed extraction
+        # does not quietly leave an invoice out of Silver.
+        - task_key: build_silver_invoice
+          depends_on:
+            - task_key: for_each_invoice
+          notebook_task:
+            notebook_path: ../src/flow04/03_build_silver_invoice.py
+          environment_key: default
+
+      environments:
+        - environment_key: default
+          spec:
+            environment_version: "6"
+      queue:
+        enabled: true
