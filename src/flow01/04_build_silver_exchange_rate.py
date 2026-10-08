@@ -3,16 +3,24 @@
 # [tool.databricks.environment]
 # environment_version = "6"
 # ///
-# Flow 01, step 4: Silver table combining historical and current exchange rates.
+# Flow 01, step 4: Silver table combining historical and current exchange
+# rates, built with the DataFrame API. Not wired into a job.
 #
-# - Combine bronze_exchange_rate_hist (CSV view) and bronze_exchange_rate_current (API).
+# - Combine bronze_exchange_rate_hist (CSV view) and
+#   bronze_exchange_rate_current (API).
 # - Keep all columns from Bronze.
-# - Deduplicate: one row per effectiveDate + code (QUALIFY).
-#   "Latest" (flow 06: "Define what latest means"): the NBP API row wins over the
-#   historical CSV row, because the API is the bank's own published source.
-#   Within the same source, the latest ingested_at wins.
-# - Write mode: replace only the changed date(s), not the whole table
-#   (INSERT INTO ... REPLACE USING, Databricks Runtime 17.2+ for unpartitioned tables).
+# - Deduplicate: one row per effectiveDate + code. The NBP API row wins over
+#   the historical CSV row, because the API is the bank's own published
+#   source. Within the same source, the latest ingested_at wins.
+# - Write mode: replace every effectiveDate present in the incoming data,
+#   through .option("replaceUsing", "effectiveDate"). Rows under other dates
+#   are left untouched, and an empty source deletes nothing.
+#
+# Requires Databricks Runtime 18.2+ for the Python form of REPLACE USING.
+
+# COMMAND ----------
+from pyspark.sql import functions as F
+from pyspark.sql.window import Window
 
 # COMMAND ----------
 # ── Parameters (passed by DABs job as job-level parameters) ──
@@ -34,60 +42,62 @@ hist_view = f"{catalog}.{bronze_schema}.bronze_exchange_rate_hist"
 current_table = f"{catalog}.{bronze_schema}.bronze_exchange_rate_current"
 table_name = f"{catalog}.{silver_schema}.silver_exchange_rate"
 
-# Columns that come from the source files / API (tracking columns excluded).
-source_columns_sql = "`table`, currency, code, no, effectiveDate, mid"
-all_columns_sql = f"{source_columns_sql}, source_file, ingested_at"
+# Pinned column order, so the written frame cannot drift from the table.
+# "table" needs no backticks here: it is a column name, not parsed as SQL.
+SILVER_COLUMNS = [
+    "table", "currency", "code", "no", "effectiveDate", "mid",
+    "source_file", "ingested_at",
+]
+
 # COMMAND ----------
 
-# ── Combine historical and current data, deduplicate with QUALIFY ──
-# One row per effectiveDate + code.
-# source_priority: 1 = API (wins), 2 = historical CSV. Ties within a source: latest ingested_at.
-# source_priority is only used for ordering and is not written to Silver.
-deduplicated_sql = f"""
-SELECT {all_columns_sql}
-FROM (
-    SELECT {all_columns_sql}, 1 AS source_priority FROM {current_table}
-    UNION ALL
-    SELECT {all_columns_sql}, 2 AS source_priority FROM {hist_view}
-) AS combined
-QUALIFY row_number() OVER (
-    PARTITION BY effectiveDate, code
-    ORDER BY source_priority, ingested_at DESC
-) = 1
-"""
+# ── Combine both Bronze sources, tagging which one each row came from ──
+# source_priority: 1 = API (wins), 2 = historical CSV. Used for ordering only
+# and dropped before the write.
+combined = (
+    spark.table(current_table).withColumn("source_priority", F.lit(1))
+    .unionByName(
+        spark.table(hist_view).withColumn("source_priority", F.lit(2))
+    )
+)
+
+# ── Deduplicate: one row per effectiveDate + code ──
+# Number the rows in each group, keep the first, then drop the counter.
+dedup_order = Window.partitionBy("effectiveDate", "code").orderBy(
+    F.col("source_priority").asc(),
+    F.col("ingested_at").desc(),
+)
+
+deduplicated = (
+    combined
+    .withColumn("_rn", F.row_number().over(dedup_order))
+    .filter(F.col("_rn") == 1)
+    .select(*SILVER_COLUMNS)
+)
 
 # COMMAND ----------
 
 # ── First run: create the empty table with the Bronze columns ──
-spark.sql(f"""
-CREATE TABLE IF NOT EXISTS {table_name}
-AS SELECT {all_columns_sql} FROM {hist_view} WHERE 1 = 0
-""")
+# replaceUsing writes into an existing table and does not create a missing
+# one, so the table is created here first. limit(0) takes the schema without
+# any rows, and mode("ignore") makes the step a no-op once the table exists.
+(
+    spark.table(hist_view)
+    .select(*SILVER_COLUMNS)
+    .limit(0)
+    .write.mode("ignore")
+    .saveAsTable(table_name)
+)
 
-# ── Find changed dates: a date has a row that is new or differs from Silver ──
-# Done as a separate query, because REPLACE USING cannot read from its own target.
-changed_dates = [
-    row.effectiveDate
-    for row in spark.sql(f"""
-        SELECT DISTINCT effectiveDate
-        FROM (
-            SELECT {source_columns_sql} FROM ({deduplicated_sql}) AS deduplicated
-            EXCEPT
-            SELECT {source_columns_sql} FROM {table_name}
-        ) AS changed
-    """).collect()
-]
+# COMMAND ----------
 
-# ── Replace only the changed dates ──
-# REPLACE USING deletes every Silver row whose effectiveDate matches an incoming row,
-# then inserts the incoming rows.
-if changed_dates:
-    date_list = ", ".join(f"DATE'{d}'" for d in changed_dates)
-    spark.sql(f"""
-        INSERT INTO {table_name} BY NAME
-        REPLACE USING (effectiveDate)
-        SELECT {all_columns_sql}
-        FROM ({deduplicated_sql}) AS deduplicated
-        WHERE effectiveDate IN ({date_list})
-    """)
-
+# ── Write: replace every effectiveDate present in the incoming data ──
+# replaceUsing deletes the Silver rows whose effectiveDate matches an incoming
+# row, then inserts the incoming rows. Dates absent from the source keep their
+# existing rows.
+(
+    deduplicated.write
+    .mode("overwrite")
+    .option("replaceUsing", "effectiveDate")
+    .saveAsTable(table_name)
+)
