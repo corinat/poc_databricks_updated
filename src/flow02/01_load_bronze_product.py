@@ -8,6 +8,8 @@
 # - Source: every .xlsx file in the products_excel folder, read as-is. Column
 #   names stay as the sheet holds them and every column lands as STRING;
 #   nothing is cast. Typing and renaming to the data model happen downstream.
+# - Anything a workbook sends that does not fit the schema is kept in
+#   _rescued_data rather than dropped, so a changed sheet stays visible.
 # - Write mode: append, through Auto Loader. A new file is a new delivery.
 # - Trigger: file arrival on the products_excel folder of the volume.
 #
@@ -81,9 +83,15 @@ df = (
     .option("pathGlobFilter", "*.xlsx")
     # The sheet has a single header row. More than one is not supported.
     .option("headerRows", 1)
-    # Schema evolution is not supported for Excel with Auto Loader, and the
-    # schema is given explicitly anyway.
+    # Schema evolution is not supported for Excel with Auto Loader, and with a
+    # schema provided the evolution mode would be none regardless.
     .option("cloudFiles.schemaEvolutionMode", "none")
+    # Which makes the rescue column the only thing standing between a changed
+    # sheet and silent loss: a column added to the workbook, a value that does
+    # not fit its type, a header whose case differs, all land here as JSON with
+    # the file they came from, instead of being ignored.
+    # Drift is then a query: WHERE _rescued_data IS NOT NULL.
+    .option("rescuedDataColumn", "_rescued_data")
     .schema(product_schema)
     .load(source_dir)
 )
