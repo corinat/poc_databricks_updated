@@ -20,27 +20,32 @@
 # steps 1 to 3 and 5.
 #
 # Steps 1 to 3 were first built as a second pipeline, with three append flows
-# fanning into one streaming table. That is dropped. Two reasons.
+# fanning into one streaming table. That is dropped, and for one reason only.
 #
 # A pipeline cannot order its flows here. append_flow's depends_on parameter
 # exists for exactly this, but it is Public Preview, and the preview cannot be
 # enabled for serverless compute on Databricks Free Edition, which is what this
-# project runs on. The three flows would therefore run with no ordering between
-# them. Ordering is what makes the schema change a recorded event, and between
-# job tasks it is just depends_on.
+# project runs on. The three flows would run with no ordering between them,
+# so whichever delivery committed first would decide whether bronze_order ever
+# existed without sales_channel — and the schema widening, which flow 05 step 3
+# exists to demonstrate, might never be recorded at all. Between job tasks the
+# same ordering is one depends_on.
 #
-# And the historical load is controlled explicitly here. A pipeline expresses a
-# one-off delivery as append_flow(once=True), which runs on the first update
-# and on a full refresh with no say in the matter. The load_historical
-# parameter below makes it a decision per run instead.
+# Nothing else argued against the pipeline, and two things that once appeared
+# here did not survive. They are recorded so they are not reached for again.
 #
-# One argument that used to appear here no longer separates the two, and is
-# recorded so it is not reached for again: "a pipeline makes every delivery
-# idempotent by construction, which hides flow 05 step 4's point that append
-# alone is not idempotent". Steps 1 and 3 now carry source_file guards, so the
-# loads are idempotent here too — by hand rather than by framework. Showing
-# that append alone is not idempotent takes a deliberate DELETE either way;
-# src/flow05/README.md says how.
+#   "append_flow has no once parameter, so a one-off batch delivery has nowhere
+#   to go" — false. It does. That signature came from the OSS pyspark wheel in
+#   databricks-connect, which lags the Databricks runtime.
+#
+#   "a pipeline makes every delivery idempotent by construction, which hides
+#   flow 05 step 4's point that append alone is not idempotent" — no longer
+#   separates the two. Steps 1 and 3 carry source_file guards, so the loads are
+#   idempotent here too, by hand rather than by framework.
+#
+# The pipeline would in fact have been better in one respect: a full refresh
+# rebuilds a streaming table and its flows from scratch in one command, where
+# here that is the manual runbook in src/flow05/README.md.
 #
 # Triggers: none. Flow 05 specifies none, and these are fixed files rather than
 # a folder that keeps receiving deliveries.
