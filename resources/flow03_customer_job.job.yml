@@ -49,5 +49,7 @@ resources:
         - environment_key: default
           spec:
             environment_version: "6"
+            # DQX, for the Bronze to Silver quality gate (flow 06).
+            dependencies: ${var.silver_job_dependencies}
       queue:
         enabled: true

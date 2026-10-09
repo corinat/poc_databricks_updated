@@ -1,0 +1,115 @@
+# DQX checks for the bronze_order to silver_order gate (flow 06, section 2).
+#
+# Loaded by src/flow05/04_build_silver_order.py, which gets this file's path as
+# the checks_path job parameter. The bundle syncs it to the workspace, so the
+# rules are versioned with the code rather than living in a workspace file
+# somebody edits by hand.
+#
+# criticality decides where a failing row goes:
+#   error   the row goes to silver_dq_quarantine and not to silver_order
+#   warn    the row goes to both — it is usable but recorded as suspect
+#
+# The split follows flow 06's own instruction to use left joins "wherever a
+# missing invoice/rate must not drop the order": a reference that has not
+# loaded yet is not a reason to lose a sale, so every foreign key is a warning.
+# error is kept for rows that are structurally unusable.
+#
+# No catalog or schema appears here. The foreign key checks name a reference
+# DataFrame, and the notebook resolves each name against the target it runs in,
+# so this file is the same in dev, test and prod.
+
+# ── Completeness ──
+- name: order_id_is_null
+  criticality: error
+  check:
+    function: is_not_null
+    arguments:
+      column: order_id
+
+# ── Uniqueness ──
+# silver_order is one row per order_id, and order_id is the merge key. A
+# duplicate here would make the MERGE fail outright, so this is an error.
+- name: order_id_is_not_unique
+  criticality: error
+  check:
+    function: is_unique
+    arguments:
+      columns:
+        - order_id
+
+# ── Validity ──
+# sql_expression takes the condition that must hold: a row fails when the
+# expression evaluates to false.
+- name: quantity_is_not_positive
+  criticality: error
+  check:
+    function: sql_expression
+    arguments:
+      expression: quantity > 0
+      msg: quantity must be greater than zero
+      columns:
+        - quantity
+
+- name: net_amount_is_negative
+  criticality: error
+  check:
+    function: sql_expression
+    arguments:
+      expression: net_amount >= 0
+      msg: net_amount must not be negative
+      columns:
+        - net_amount
+
+# The allowed values are quoted twice on purpose. is_in_list resolves a bare
+# string as a column expression, so paid would be read as a column named paid;
+# 'paid' is what makes it a string literal.
+# silver_order carries the current status only. delivered appears in the status
+# change feed, not here, so it is not in this list.
+- name: status_is_not_in_the_list
+  criticality: warn
+  check:
+    function: is_in_list
+    arguments:
+      column: status
+      allowed:
+        - "'paid'"
+        - "'shipped'"
+        - "'cancelled'"
+
+# ── Referential integrity ──
+# Each reference is a Silver or Bronze table, never a Gold dimension. Gold is
+# built from Silver, so a check at the Bronze to Silver boundary cannot depend
+# on it. bronze_product is used because flow 02 publishes as-is and has no
+# Silver table of its own.
+- name: customer_id_not_in_silver_customer
+  criticality: warn
+  check:
+    function: foreign_key
+    arguments:
+      columns:
+        - customer_id
+      ref_columns:
+        - customer_id
+      ref_df_name: silver_customer
+
+- name: product_id_not_in_bronze_product
+  criticality: warn
+  check:
+    function: foreign_key
+    arguments:
+      columns:
+        - product_id
+      ref_columns:
+        - product_id
+      ref_df_name: bronze_product
+
+- name: currency_code_not_in_bronze_currency
+  criticality: warn
+  check:
+    function: foreign_key
+    arguments:
+      columns:
+        - currency_code
+      ref_columns:
+        - currency_code
+      ref_df_name: bronze_currency

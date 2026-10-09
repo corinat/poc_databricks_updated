@@ -10,6 +10,15 @@ include:
 variables:
   catalog:
     default: "poc_dev"
+  # Runtime dependencies for the serverless jobs that run DQX, which is every
+  # Bronze to Silver build. Declared here so the pinned version lives in one
+  # place rather than in each job file. The version is pinned because DQX
+  # documents breaking changes between releases.
+  # type: complex is required: a variable whose default is a list.
+  silver_job_dependencies:
+    type: complex
+    default:
+      - databricks-labs-dqx==0.16.0
   dev_flag:
     default: true
 
