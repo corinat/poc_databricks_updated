@@ -1,0 +1,221 @@
+# resources/flow05.yml
+# Flow 05 — orders and order status history.
+#
+# Two jobs and one pipeline, covering the job summary table in
+# flows/flows/05_orders.md:
+#
+#   load_order              job       steps 1 to 3 and 5: bronze_order, silver_order
+#                                     step 1 is gated by the load_historical
+#                                     parameter; steps 2, 3 and 5 run always
+#   load_order_status       job       step 6: the status change feed and its history
+#   order_status_history    pipeline  AUTO CDC, SCD Type 2 (step 6)
+#
+# Two jobs rather than one, which is also how flows 01 and 02 are arranged.
+# The two halves share no data: the status feed is a different file with
+# different columns, and silver_order_status_history is built from it alone.
+# Separating them means either half can be rebuilt without the other.
+#
+# The pipeline exists because AUTO CDC is pipeline-only. Everything else is a
+# notebook task, which is also the task type the flow's own table specifies for
+# steps 1 to 3 and 5.
+#
+# Steps 1 to 3 were first built as a second pipeline, with three append flows
+# fanning into one streaming table. That is dropped. Two reasons.
+#
+# A pipeline cannot order its flows here. append_flow's depends_on parameter
+# exists for exactly this, but it is Public Preview, and the preview cannot be
+# enabled for serverless compute on Databricks Free Edition, which is what this
+# project runs on. The three flows would therefore run with no ordering between
+# them. Ordering is what makes the schema change a recorded event, and between
+# job tasks it is just depends_on.
+#
+# And the historical load is controlled explicitly here. A pipeline expresses a
+# one-off delivery as append_flow(once=True), which runs on the first update
+# and on a full refresh with no say in the matter. The load_historical
+# parameter below makes it a decision per run instead.
+#
+# One argument that used to appear here no longer separates the two, and is
+# recorded so it is not reached for again: "a pipeline makes every delivery
+# idempotent by construction, which hides flow 05 step 4's point that append
+# alone is not idempotent". Steps 1 and 3 now carry source_file guards, so the
+# loads are idempotent here too — by hand rather than by framework. Showing
+# that append alone is not idempotent takes a deliberate DELETE either way;
+# src/flow05/README.md says how.
+#
+# Triggers: none. Flow 05 specifies none, and these are fixed files rather than
+# a folder that keeps receiving deliveries.
+
+resources:
+  pipelines:
+    # Step 6. Owns silver_order_status_history.
+    order_status_history:
+      name: order_status_history
+      serverless: true
+
+      # Silver, so the history table sits beside the other Silver tables
+      # rather than in the Bronze schema its source lives in.
+      catalog: ${var.catalog}
+      schema: ${resources.schemas.silver.name}
+
+      libraries:
+        - file:
+            path: ../src/flow05/06_silver_order_status_history.py
+
+      configuration:
+        source_table: ${var.catalog}.${resources.schemas.bronze_raw.name}.bronze_order_status_changes
+
+  jobs:
+    load_order:
+      name: load_order
+
+      # Job-level parameters: passed to every task, read in notebooks via dbutils.widgets.
+      parameters:
+        - name: catalog
+          default: ${var.catalog}
+        - name: bronze_schema
+          default: ${resources.schemas.bronze_raw.name}
+        - name: silver_schema
+          default: ${resources.schemas.silver.name}
+        - name: volume_name
+          default: ${resources.volumes.input_data.name}
+        # Absolute path to the DQX rules in the deployed bundle.
+        # workspace.file_path resolves per target, so this works in dev, test
+        # and prod without the notebook assuming a working directory.
+        - name: checks_path
+          default: ${workspace.file_path}/checks/silver_order.yml
+        # Whether this run performs the one-off historical load of
+        # orders.parquet. "false" by default: that delivery is a backfill, not
+        # something a routine run should repeat. Pass "true" on a fresh
+        # environment, or to replay it after deleting its rows.
+        - name: load_historical
+          default: "false"
+
+      tasks:
+        # ── Orders: the three deliveries into bronze_order ──
+        # Deliberately sequential, though the three files are independent.
+        # The order is what makes the schema change a recorded event:
+        # bronze_order is created without sales_channel by step 1 and gains
+        # it at step 3. Run them in parallel and whichever delivery commits
+        # first decides whether the table ever lacked the column, so the
+        # widening may never appear in its history. The resulting data is
+        # the same either way.
+
+        # The gate on the historical load. A condition task needs no compute
+        # and is the only way a job can branch on a parameter value.
+        - task_key: check_load_historical
+          condition_task:
+            left: "{{job.parameters.load_historical}}"
+            op: EQUAL_TO
+            right: "true"
+
+        # Step 1: the full 30-order snapshot, the initial historical load.
+        # Runs only on the "true" outcome, so a routine run skips it entirely
+        # instead of starting a task that would exit on its own guard.
+        - task_key: load_orders_batch
+          depends_on:
+            - task_key: check_load_historical
+              outcome: "true"
+          notebook_task:
+            notebook_path: ../src/flow05/01_load_bronze_order.py
+          environment_key: default
+
+        # Step 2: the incremental delivery, via Auto Loader. This is where the
+        # two branches rejoin, and the pair of dependencies is deliberate —
+        # exactly one of them is live in either case, which is what makes
+        # run_if ALL_DONE take effect.
+        #
+        #   load_historical = "true"
+        #     load_orders_batch runs, so that edge is live and this task waits
+        #     for it. The condition edge below wanted "false" and is excluded.
+        #
+        #   load_historical = "false"
+        #     load_orders_batch is excluded. The condition edge below wanted
+        #     "false" and got it, so that edge is live.
+        #
+        # Both edges are needed because a task whose dependencies are ALL
+        # excluded is itself excluded regardless of run_if. Depending on step 1
+        # alone would exclude this task on every routine run and cascade down
+        # the chain, which is what happened before this was fixed.
+        #
+        # The outcome on the condition edge is not optional: the Jobs API
+        # rejects a dependency on an if/else condition that does not specify
+        # one — 400 INVALID_PARAMETER_VALUE. It reads oddly next to the task it
+        # gates, but "false" here means "the historical load was not asked
+        # for", which is precisely when this edge has to carry the chain.
+        - task_key: load_orders_stream
+          depends_on:
+            - task_key: check_load_historical
+              outcome: "false"
+            - task_key: load_orders_batch
+          run_if: ALL_DONE
+          notebook_task:
+            notebook_path: ../src/flow05/02_load_bronze_order_stream.py
+          environment_key: default
+
+        # Step 3: the delivery that adds sales_channel, via mergeSchema.
+        # Last of the three, so the table always exists without sales_channel
+        # before this widens it. Plain ALL_SUCCESS: step 2 always runs, so
+        # there is nothing here to be excluded by.
+        - task_key: load_orders_schema_change
+          depends_on:
+            - task_key: load_orders_stream
+          notebook_task:
+            notebook_path: ../src/flow05/03_load_bronze_order_schema_change.py
+          environment_key: default
+
+        # Step 5: one row per order_id, merged into silver_order.
+        # Depends on step 3 alone, the end of the chain, so it needs no run_if
+        # and still waits for every delivery transitively.
+        - task_key: build_silver_order
+          depends_on:
+            - task_key: load_orders_schema_change
+          notebook_task:
+            notebook_path: ../src/flow05/04_build_silver_order.py
+          environment_key: default
+
+      environments:
+        - environment_key: default
+          spec:
+            environment_version: "6"
+            # DQX, for the Bronze to Silver quality gate (flow 06).
+            dependencies: ${var.silver_job_dependencies}
+      queue:
+        enabled: true
+
+    # Step 6. The status change feed and the SCD Type 2 history built from it.
+    # No DQX dependency: this half has no Bronze to Silver gate yet, because
+    # silver_order_status_history is produced by a pipeline and a pipeline has
+    # no environments block to carry the library.
+    load_order_status:
+      name: load_order_status
+
+      # Job-level parameters: passed to every task, read in notebooks via dbutils.widgets.
+      parameters:
+        - name: catalog
+          default: ${var.catalog}
+        - name: bronze_schema
+          default: ${resources.schemas.bronze_raw.name}
+        - name: volume_name
+          default: ${resources.volumes.input_data.name}
+
+      tasks:
+        # Land the status change feed in Bronze.
+        - task_key: load_bronze_order_status_changes
+          notebook_task:
+            notebook_path: ../src/flow05/05_load_bronze_order_status_changes.py
+          environment_key: default
+
+        # Then rebuild the SCD Type 2 history from it. Depends on the landing,
+        # so the feed is always in Bronze before the history is recomputed.
+        - task_key: build_silver_order_status_history
+          depends_on:
+            - task_key: load_bronze_order_status_changes
+          pipeline_task:
+            pipeline_id: ${resources.pipelines.order_status_history.id}
+
+      environments:
+        - environment_key: default
+          spec:
+            environment_version: "6"
+      queue:
+        enabled: true
