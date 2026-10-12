@@ -1,90 +1,23 @@
 # resources/flow05_order_job.job.yml
-# Flow 05 — orders and order status history.
+# Flow 05 — the three order deliveries into bronze_order, and silver_order.
 #
-# Two jobs and one pipeline, covering the job summary table in
-# flows/flows/05_orders.md:
+# Steps 1 to 3 and 5 of flows/flows/05_orders.md. The status change feed and
+# its SCD Type 2 history are a separate job and pipeline, in
+# flow05_order_status_job.job.yml and flow05_order_status_pipeline.pipeline.yml:
+# the two halves share no data, so either can be rebuilt without the other.
 #
-#   load_order              job       steps 1 to 3 and 5: bronze_order, silver_order
-#                                     step 1 is gated by the load_historical
-#                                     parameter; steps 2, 3 and 5 run always
-#   load_order_status       job       step 6: the status change feed and its history
-#   order_status_history    pipeline  AUTO CDC, SCD Type 2 (step 6)
-#
-# Two jobs rather than one, which is also how flows 01 and 02 are arranged.
-# The two halves share no data: the status feed is a different file with
-# different columns, and silver_order_status_history is built from it alone.
-# Separating them means either half can be rebuilt without the other.
-#
-# The pipeline exists because AUTO CDC is pipeline-only. Everything else is a
-# notebook task, which is also the task type the flow's own table specifies for
-# steps 1 to 3 and 5.
-#
-# Steps 1 to 3 were first built as a second pipeline, with three append flows
-# fanning into one streaming table. That is dropped, and for one reason only.
-#
-# A pipeline cannot order its flows here. append_flow's depends_on parameter
-# exists for exactly this, but it is Public Preview, and the preview cannot be
-# enabled for serverless compute on Databricks Free Edition, which is what this
-# project runs on. The three flows would run with no ordering between them,
-# so whichever delivery committed first would decide whether bronze_order ever
-# existed without sales_channel — and the schema widening, which flow 05 step 3
-# exists to demonstrate, might never be recorded at all. Between job tasks the
-# same ordering is one depends_on.
-#
-# Nothing else argued against the pipeline, and two things that once appeared
-# here did not survive. They are recorded so they are not reached for again.
-#
-#   "append_flow has no once parameter, so a one-off batch delivery has nowhere
-#   to go" — false. It does. That signature came from the OSS pyspark wheel in
-#   databricks-connect, which lags the Databricks runtime.
-#
-#   "a pipeline makes every delivery idempotent by construction, which hides
-#   flow 05 step 4's point that append alone is not idempotent" — no longer
-#   separates the two. Steps 1 and 3 carry source_file guards, so the loads are
-#   idempotent here too, by hand rather than by framework.
-#
-# The pipeline would in fact have been better in one respect: a full refresh
-# rebuilds a streaming table and its flows from scratch in one command, where
-# here that is the manual runbook in src/flow05/README.md.
+# These steps are job tasks rather than pipeline flows, and for one reason.
+# Ordering flows inside a pipeline needs append_flow's depends_on parameter,
+# which is Public Preview, and the preview cannot be enabled for serverless
+# compute on Databricks Free Edition. Unordered, whichever delivery committed
+# first would decide whether bronze_order ever existed without sales_channel,
+# and the schema widening that step 3 exists to demonstrate might never be
+# recorded. Between job tasks the same ordering is one depends_on.
 #
 # Triggers: none. Flow 05 specifies none, and these are fixed files rather than
 # a folder that keeps receiving deliveries.
 
 resources:
-  pipelines:
-    # Step 6. Owns silver_order_status_history.
-    order_status_history:
-      name: order_status_history
-      serverless: true
-
-      # Silver, so the history table sits beside the other Silver tables
-      # rather than in the Bronze schema its source lives in.
-      catalog: ${var.catalog}
-      schema: ${resources.schemas.silver.name}
-
-      libraries:
-        - file:
-            path: ../src/flow05/06_silver_order_status_history.py
-
-      # DQX, for the quality gate in front of the AUTO CDC flow. A pipeline
-      # declares its Python dependencies here rather than in a job environment.
-      environment:
-        dependencies:
-          - databricks-labs-dqx==0.16.0
-
-      # Read in the pipeline code with spark.conf.get(...), so every path and
-      # table name follows the bundle target instead of being written into the
-      # source file.
-      configuration:
-        source_table: ${var.catalog}.${resources.schemas.bronze_raw.name}.bronze_order_status_changes
-        # Reference table for the order_id foreign key check.
-        order_table: ${var.catalog}.${resources.schemas.silver.name}.silver_order
-        # The shared quarantine table, which this pipeline does not own and
-        # reaches through a sink.
-        quarantine_table: ${var.catalog}.${resources.schemas.silver.name}.silver_dq_quarantine
-        checks_path: ${workspace.file_path}/checks/silver_order_status_history.yml
-        common_path: ${workspace.file_path}/src/common
-
   jobs:
     load_order:
       name: load_order
@@ -211,36 +144,3 @@ resources:
     # No DQX dependency: this half has no Bronze to Silver gate yet, because
     # silver_order_status_history is produced by a pipeline and a pipeline has
     # no environments block to carry the library.
-    load_order_status:
-      name: load_order_status
-
-      # Job-level parameters: passed to every task, read in notebooks via dbutils.widgets.
-      parameters:
-        - name: catalog
-          default: ${var.catalog}
-        - name: bronze_schema
-          default: ${resources.schemas.bronze_raw.name}
-        - name: volume_name
-          default: ${resources.volumes.input_data.name}
-
-      tasks:
-        # Land the status change feed in Bronze.
-        - task_key: load_bronze_order_status_changes
-          notebook_task:
-            notebook_path: ../src/flow05/05_load_bronze_order_status_changes.py
-          environment_key: default
-
-        # Then rebuild the SCD Type 2 history from it. Depends on the landing,
-        # so the feed is always in Bronze before the history is recomputed.
-        - task_key: build_silver_order_status_history
-          depends_on:
-            - task_key: load_bronze_order_status_changes
-          pipeline_task:
-            pipeline_id: ${resources.pipelines.order_status_history.id}
-
-      environments:
-        - environment_key: default
-          spec:
-            environment_version: "6"
-      queue:
-        enabled: true

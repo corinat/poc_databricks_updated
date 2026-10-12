@@ -44,7 +44,15 @@ So `bronze_order` holds 46 rows for 30 orders: the second and third files replay
 
 ## Jobs
 
-Defined in [resources/flow05_order_job.job.yml](../../resources/flow05_order_job.job.yml). Notebook tasks on serverless environment 6, plus one pipeline for `AUTO CDC`, which is pipeline-only. No triggers — these are fixed files, not a folder receiving deliveries.
+Three resource files, one resource each, which is the convention `databricks bundle validate` expects:
+
+| File | Resource |
+|---|---|
+| [flow05_order_job.job.yml](../../resources/flow05_order_job.job.yml) | the `load_order` job |
+| [flow05_order_status_job.job.yml](../../resources/flow05_order_status_job.job.yml) | the `load_order_status` job |
+| [flow05_order_status_pipeline.pipeline.yml](../../resources/flow05_order_status_pipeline.pipeline.yml) | the `order_status_history` pipeline |
+
+Notebook tasks on serverless environment 6, plus the pipeline for `AUTO CDC`, which is pipeline-only. No triggers — these are fixed files, not a folder receiving deliveries.
 
 ```mermaid
 flowchart LR
