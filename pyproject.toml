@@ -12,6 +12,10 @@ dependencies = []
 dev = [
     # Must match the serverless environment version used by the jobs (6 → Databricks Connect 19).
     "databricks-connect~=19.0",
+    # Not a runtime dependency: the jobs get DQX from the bundle's
+    # silver_job_dependencies variable. This is here so the editor and ruff
+    # resolve the import. Keep the pin equal to the one in databricks.yml.
+    "databricks-labs-dqx==0.16.0",
     "pytest",
     "ruff",
     "ipykernel",
