@@ -27,7 +27,9 @@ flowchart LR
     L1 --> L2["2 · orders_stream.parquet"] --> L3["3 · orders_schema_change.parquet"] --> B1[bronze_order]
     B1 --> DQ{DQX} -->|passed| S1[silver_order]
     DQ -->|flagged| Q[silver_dq_quarantine]
-    P4[order_status_changes.parquet] --> B2[bronze_order_status_changes] --> S2[silver_order_status_history]
+    P4[order_status_changes.parquet] --> B2[bronze_order_status_changes] --> DQ2{DQX}
+    DQ2 -->|passed| V2[valid_status_changes<br/>view] --> S2[silver_order_status_history]
+    DQ2 -->|flagged| Q
 ```
 
 ## The three deliveries
@@ -42,7 +44,7 @@ So `bronze_order` holds 46 rows for 30 orders: the second and third files replay
 
 ## Jobs
 
-Defined in [resources/flow05.yml](../../resources/flow05.yml). Notebook tasks on serverless environment 6, plus one pipeline for `AUTO CDC`, which is pipeline-only. No triggers — these are fixed files, not a folder receiving deliveries.
+Defined in [resources/flow05_order_job.job.yml](../../resources/flow05_order_job.job.yml). Notebook tasks on serverless environment 6, plus one pipeline for `AUTO CDC`, which is pipeline-only. No triggers — these are fixed files, not a folder receiving deliveries.
 
 ```mermaid
 flowchart LR
@@ -120,6 +122,10 @@ Different options, opposite failure modes:
 | `order_amount` | **`net_amount`** | renamed, → `DECIMAL(18,2)` |
 | `status` | `status` | `lower(trim(...))` |
 | `sales_channel` | `sales_channel` | nullable, not a `FACT_ORDER` column |
+| `source_file` | `source_file` | carried through — which delivery won the dedupe |
+| `ingested_at` | `ingested_at` | carried through — when the row was *delivered*, not when Silver was built |
+
+`source_file` and `ingested_at` are carried through for a reason beyond lineage: they are the only record of **which delivery won the dedupe**. Once Silver is written that decision is otherwise gone — Bronze holds every delivery of an `order_id`, so joining back cannot say which was kept without re-running the dedupe. Neither column belongs in Gold: `FACT_ORDER` is the Gold shape, so `fact_order` should name its columns rather than `SELECT *`.
 
 **Write mode:** `MERGE` on `order_id` through the Delta Python API, because the source is the DataFrame DQX returns and a temp view is ruled out by `EXERCISE.md`. `MERGE` needs one row per key, which the dedupe guarantees.
 
@@ -136,11 +142,13 @@ Rules live in [checks/silver_order.yml](../../checks/silver_order.yml), shipped 
 | `status_is_not_in_the_list` | `is_in_list` | validity | warn |
 | `customer_id_not_in_silver_customer` | `foreign_key` | referential integrity | warn |
 | `product_id_not_in_bronze_product` | `foreign_key` | referential integrity | warn |
-| `currency_code_not_in_bronze_currency` | `foreign_key` | referential integrity | warn |
+| `currency_code_not_in_bronze_currency` | `foreign_key` | referential integrity | **error** |
 
 `error` rows go to the quarantine and not to Silver; `warn` rows go to both. DQX's passing DataFrame carries no result columns, so `silver_order` keeps its declared shape.
 
-Foreign keys are warnings: a reference that has not loaded yet is not a reason to lose a sale. They point at Silver and Bronze tables, never Gold — Gold is built *from* Silver, so a check at this boundary cannot depend on it. `build_silver_order` therefore needs `silver_customer`, `bronze_product` and `bronze_currency` to exist.
+The three foreign keys are not at the same level, and the test is whether the missing reference breaks a calculation or only a description. `customer_id` and `product_id` are descriptive — the join yields NULL attributes, every amount stays correct, so the order is usable and the gap is only recorded. `currency_code` is arithmetic: without a known currency there is no rate, `order_amount_pln` cannot be computed, and the order would sit in Gold with a NULL where a converted amount belongs, understating a PLN total silently. Silver is meant to be conformed, so that row is kept out.
+
+An order held back this way is not lost — it stays in Bronze, which is replayable, and in the quarantine with its reason. Once the currency is in the reference data a re-run brings it into Silver. They point at Silver and Bronze tables, never Gold — Gold is built *from* Silver, so a check at this boundary cannot depend on it. `build_silver_order` therefore needs `silver_customer`, `bronze_product` and `bronze_currency` to exist.
 
 `order_id_is_not_unique` cannot fire as things stand: the dedupe runs before DQX sees the data. It documents the invariant.
 
@@ -154,7 +162,7 @@ Foreign keys are warnings: a reference that has not loaded yet is not a reason t
 | `failed_checks` | `ARRAY<STRUCT<name, message>>` |
 | `quarantined_at` | `TIMESTAMP` |
 
-`VARIANT` because sources have different columns and one shared table cannot give each a typed schema. `failed_checks` holds only name and message — DQX's own result struct has ten fields, most of them bookkeeping, and pinning it in DDL would couple the table to the library version.
+`VARIANT` because sources have different columns and one shared table cannot give each a typed schema. Its shape and the projection into it live in [src/common/dq.py](../common/dq.py), so no gate writes that SQL itself. `failed_checks` holds only name and message — DQX's own result struct has ten fields, most of them bookkeeping, and pinning it in DDL would couple the table to the library version.
 
 ## Order status history
 
@@ -162,7 +170,21 @@ Foreign keys are warnings: a reference that has not loaded yet is not a reason t
 
 `05_...` lands it with Auto Loader, with `schemaEvolutionMode: rescue` so the recorded schema stays fixed and drift goes to `_rescued_data` — the table must stay append-only, because the pipeline reads it as a stream.
 
-`06_...` is a pipeline source, not a notebook. `KEYS (order_id)`, `SEQUENCE BY sequence_num`, `STORED AS SCD TYPE 2`, `APPLY AS DELETE WHEN status = 'cancelled'`. `sequence_num` rather than `changed_at`, because the integer orders the changes exactly where several sharing a date would not. A delete closes the open interval rather than removing rows, so a cancelled order keeps its history and ends with no current row — `__END_AT IS NULL` is the current status. `except_column_list` drops the Bronze tracking columns, which would otherwise sit beside `__START_AT`/`__END_AT` and invite reading one as the other.
+`06_...` is a pipeline source, not a notebook, and it declares four objects: a temporary view of the checked feed, a sink, the flow filling that sink, and the SCD2 table with its CDC flow.
+
+```
+bronze_order_status_changes
+   ├── DQX valid ───→ valid_status_changes (view) ──[AUTO CDC]──→ silver_order_status_history
+   └── DQX invalid ──→ sink ──→ silver_dq_quarantine
+```
+
+Two things about that shape are forced rather than chosen. The **view** exists because `create_auto_cdc_flow` takes its source as a name, not a DataFrame, so there is no point at which a checked frame can be handed to it. The **sink** exists because a pipeline cannot write outside itself: a pipeline source declares a graph of datasets the pipeline owns, and `create_sink` is the declared destination that lets the rejected rows reach the one shared quarantine table instead of a second, pipeline-owned one.
+
+A view rather than a table is a deliberate reading of [docs/EXERCISE.md](../../docs/EXERCISE.md). Its rule is that a view is only allowed where a flow asks for one, and flow 05 does not — but the rule above it says every transformation must *end* in a real named table, and this one does, on both sides: `silver_order_status_history` and `silver_dq_quarantine`. Materialising the view instead would put a filtered copy of the Bronze feed in the Silver schema, with no business meaning of its own and no place in the data model.
+
+Its rules are in [checks/silver_order_status_history.yml](../../checks/silver_order_status_history.yml): `order_id` and `sequence_num` not null as errors, the status list and the `order_id` foreign key as warnings. There is no uniqueness rule, and that is a runtime limit rather than a choice — `is_unique` is implemented with an unbounded `Window.partitionBy` aggregation, which Spark does not support on an append-mode streaming DataFrame, and this flow reads a stream because the CDC flow downstream needs one. A duplicate `(order_id, sequence_num)` is resolved by the CDC flow itself, which keeps the last by sequence.
+
+The CDC flow itself: `KEYS (order_id)`, `SEQUENCE BY sequence_num`, `STORED AS SCD TYPE 2`, `APPLY AS DELETE WHEN status = 'cancelled'`. `sequence_num` rather than `changed_at`, because the integer orders the changes exactly where several sharing a date would not. A delete closes the open interval rather than removing rows, so a cancelled order keeps its history and ends with no current row — `__END_AT IS NULL` is the current status. `except_column_list` drops the Bronze tracking columns, which would otherwise sit beside `__START_AT`/`__END_AT` and invite reading one as the other.
 
 The feed contains `delivered`, which appears nowhere in `orders.parquet`, so `silver_order.status` and the history can legitimately disagree.
 
@@ -181,30 +203,32 @@ FROM <catalog>.<silver_schema>.silver_order;
 -- Quality results
 SELECT source_table, severity, count(*) FROM <catalog>.<silver_schema>.silver_dq_quarantine
 GROUP BY source_table, severity;
+
+-- Which delivery won the dedupe: the 8 replayed orders should show
+-- orders_schema_change.parquet, which is why they have a sales_channel
+SELECT order_id, source_file, sales_channel
+FROM <catalog>.<silver_schema>.silver_order
+WHERE order_id <= 'O-0008' ORDER BY order_id;
 ```
 
 Schema evolution is recorded on step 3's write: `DESCRIBE HISTORY` shows `CREATE TABLE AS SELECT` (30), `STREAMING UPDATE` (8), then `WRITE` with `canMergeSchema: true` (8). There is no separate `ADD COLUMNS` entry — `mergeSchema` evolves the schema as part of the append.
 
-All 30 orders pass every rule, so the quarantine is empty on clean data. To produce one example, insert a failing row and re-run `build_silver_order`:
+All 30 orders pass every rule, so the quarantine is empty on clean data. The gate's behaviour is proved by [tests/test_quality_gate.py](../../tests/test_quality_gate.py) rather than by inserting rows into Bronze: it builds orders in memory, runs the real rule files over them, and asserts that an `error` row is kept out of Silver while a `warn`-only row reaches both. Reference frames are built in memory too, so no table is read and none is written.
 
-```sql
-INSERT INTO <catalog>.<bronze_schema>.bronze_order
-    (order_id, customer_id, product_id, order_date, quantity, unit_price,
-     currency, order_amount, status, sales_channel, source_file, ingested_at)
-VALUES ('O-9001', 999, 'P-999', '2026-01-15', 0, 10.0, 'XXX', -5.0, 'unknown',
-        NULL, 'dq_test.parquet', current_timestamp());
+```bash
+# validates every rule file; needs no compute
+uv run pytest tests/test_quality_gate.py::test_checks_files_are_valid --noconftest -v
 ```
-
-It trips six of the eight rules, lands with `severity = 'error'`, and `silver_order` stays at 30.
 
 ## Design decisions
 
 | Topic | Decision | Reason |
 |---|---|---|
-| Steps 1–3 as notebooks, not a pipeline | notebook tasks | **Flow ordering.** An earlier version fanned three `append_flow`s into one streaming table; ordering them needs `append_flow`'s `depends_on`, which is Public Preview and cannot be enabled for serverless on Databricks Free Edition. Unordered, whichever delivery commits first decides whether `bronze_order` ever lacked `sales_channel`, so the widening might never be recorded. The pipeline would have been better in one respect: full refresh rebuilds in one command. |
+| Steps 1–3 as notebook tasks | job tasks, not pipeline flows | **Flow ordering.** Ordering flows inside a pipeline needs `append_flow`'s `depends_on`, which is Public Preview and cannot be enabled for serverless on Databricks Free Edition. Unordered, whichever delivery commits first decides whether `bronze_order` ever lacked `sales_channel`, so the widening might never be recorded. Between job tasks the same ordering is one `depends_on`. |
 | Order of the three loads | chained with `depends_on` | Makes the widening a recorded schema change. The flow asks for no order and the data is identical either way. |
 | Historical load | `load_historical` parameter + `condition_task` | `orders.parquet` is a one-off backfill, so a routine run should not touch it. |
 | Idempotency guard on steps 1 and 3 | skip a file already in `source_file` | Unguarded, every re-run added 38 duplicate rows with no way to avoid it. |
+| `source_file` + `ingested_at` in `silver_order` | carried through from Bronze | They are the only record of which delivery won the dedupe — otherwise that decision is lost on write, since Bronze holds every delivery of an `order_id`. `silver_invoice` already carries `ingested_at` beyond its `FACT_` shape, so this is consistent. Both are dropped when Gold builds `fact_order`. |
 | "Latest" for the dedupe | `ingested_at`, then `order_date` | The flow says "keep the latest record per key" without defining latest. |
 | Decimal precision | `DECIMAL(18,2)` | `DATA_MODEL.md` says `decimal` without one. Values are whole or 2dp, and `net_amount` is summed downstream after a conversion where float would drift. |
 | Row validation in the notebook | only `order_id NOT NULL` in DDL | The flow says "validate keys and amounts" without saying what happens on failure; DQX owns that at this boundary. |

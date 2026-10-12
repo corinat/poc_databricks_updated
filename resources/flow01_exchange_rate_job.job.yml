@@ -25,6 +25,15 @@ resources:
           default: ${resources.schemas.bronze_raw.name}
         - name: silver_schema
           default: ${resources.schemas.silver.name}
+        # Absolute path to the DQX rules in the deployed bundle.
+        # workspace.file_path resolves per target, so this works in dev, test
+        # and prod without the notebook assuming a working directory.
+        - name: checks_path
+          default: ${workspace.file_path}/checks/silver_exchange_rate.yml
+        # Directory of src/common/dq.py in the deployed bundle, appended to
+        # sys.path by the gate notebook so its import resolves.
+        - name: common_path
+          default: ${workspace.file_path}/src/common
         - name: volume_name
           default: ${resources.volumes.input_data.name}
 

@@ -9,7 +9,8 @@ Requirements: [flows/flows/04_invoices.md](../../flows/flows/04_invoices.md), pl
 | Layer | Object | Type | Source | Write mode | Notebook |
 |---|---|---|---|---|---|
 | Bronze | `bronze_invoice` | table | `data/invoices/*.pdf` | append | `01_list_invoice_files.py`, `02_parse_invoice_file.py` |
-| Silver | `silver_invoice` | table | `bronze_invoice` | `INSERT OVERWRITE` | `03_build_silver_invoice.py` |
+| Silver | `silver_invoice` | table | `bronze_invoice` | overwrite | `03_build_silver_invoice.py` |
+| Silver | `silver_dq_quarantine` | table | rows the quality gate rejects | append | `03_build_silver_invoice.py` |
 
 Bronze objects live in schema `bronze_raw` and Silver in `silver`, in the catalog chosen by the bundle target (`poc_dev`, `poc_test`, `poc`). In the `dev` target, development mode prefixes schema names with `dev_<user>_`.
 
@@ -19,7 +20,9 @@ flowchart LR
     L -->|task value: file list| FE[for_each_invoice]
     FE --> P[parse_invoice_file<br/>one run per file]
     P --> B1[bronze_invoice<br/>parsed_data VARIANT]
-    B1 --> S1[silver_invoice<br/>header columns]
+    B1 --> DQ{DQX}
+    DQ -->|passed| S1[silver_invoice<br/>header columns]
+    DQ -->|flagged| Q[silver_dq_quarantine]
 ```
 
 ## Job and triggers
@@ -70,11 +73,39 @@ Runs once per file, as the nested task of the For Each.
 - One row per invoice. The `items` array stays in the Bronze `VARIANT`: this is the header table, and the line items do not flatten into one row per invoice.
 - Columns are renamed to the data model — `totals.total_net_amount` becomes `net_amount`, `totals.currency` becomes `currency_code`.
 - Amounts are normalised before casting: anything that is not a digit, comma, dot or minus is dropped, then the comma becomes a decimal point. This handles both `49,00` and `60,27 GBP`, and leaves a clean number untouched.
-- Dates and amounts use `try_cast`, so a value the extraction got wrong becomes NULL and is reported by the check below.
-- Every parsed row is checked for the fields an invoice is unusable without — `invoice_id`, `invoice_date`, `net_amount`, `vat_amount`, `gross_amount`. If any are missing the task fails, naming the PDF and the fields, and Silver keeps its previous contents.
-- The check runs before the dedupe. Rows with a missing `invoice_id` all fall in one NULL partition, so checking after the dedupe would report one failed extraction out of several.
-- Deduplicates to one row per `invoice_id`, newest `ingested_at` first.
-- The schema is declared with `CREATE TABLE IF NOT EXISTS` and filled with `INSERT OVERWRITE`.
+- Dates and amounts use `try_cast`, so a value the extraction got wrong becomes NULL rather than failing the query, and is caught by the quality gate instead.
+- Deduplicates to one row per `invoice_id`, newest `ingested_at` first. The partition is `coalesce(invoice_id, pdf_path)`, not `invoice_id` alone: an extraction that lost the id leaves it NULL, and every such row would fall in one partition with all but one dropped — so several failed extractions would be reported as one. `pdf_path` identifies the row whatever else is missing.
+- The rows then go through the quality gate; see [Data quality](#data-quality).
+- The schema is declared with `CREATE TABLE IF NOT EXISTS` and filled with `insertInto` in overwrite mode, which writes into the existing table rather than replacing it, so the declared schema and the `CLUSTER BY (invoice_id)` survive. It resolves by position, so the select pins the column order.
+
+## Data quality
+
+The gate runs at the Bronze to Silver boundary. Rules live in [checks/silver_invoice.yml](../../checks/silver_invoice.yml), shipped by the bundle and passed to the notebook as the `checks_path` job parameter.
+
+The fields are extracted by an LLM, so any of them can come back missing. That is what makes completeness the substance of this gate rather than a formality.
+
+| Rule | Function | Category | Criticality |
+|---|---|---|---|
+| `invoice_id_is_null` | `is_not_null` | completeness | error |
+| `invoice_date_is_null` | `is_not_null` | completeness | error |
+| `net_amount_is_null` | `is_not_null` | completeness | error |
+| `vat_amount_is_null` | `is_not_null` | completeness | error |
+| `gross_amount_is_null` | `is_not_null` | completeness | error |
+| `invoice_id_is_not_unique` | `is_unique` | uniqueness | error |
+| `net_plus_vat_is_not_gross` | `sql_expression` | validity | error |
+| `order_id_not_in_silver_order` | `foreign_key` | referential integrity | warn |
+
+An `error` row goes to `silver_dq_quarantine` and never reaches Silver. A `warn` row goes to both — an invoice billing an order that has not loaded yet is still a real invoice, and losing it would understate revenue.
+
+`net_plus_vat_is_not_gross` is the requirement's own arithmetic. All three amounts are `DECIMAL(18,2)`, so the comparison is exact rather than approximate. A row with a missing amount makes the expression NULL and is not flagged here; the completeness rules catch it instead.
+
+**One consequence to know:** `silver_invoice` can be incomplete. One bad extraction out of thirty means twenty-nine invoices are published and one is quarantined, so a total summed over the table is wrong without looking wrong. The gap is visible rather than silent — it shows up as a quarantine row, which is what flow 07's quarantine alert watches.
+
+Not in the gate, deliberately: "matching seller/buyer" from the requirement's invoice gate. The PDFs carry the seller's name and tax id but no `seller_id`, so checking it means resolving against `dim_seller` — a business join that belongs in Gold.
+
+`silver_dq_quarantine` is a project-wide table shared by every quality gate, told apart by `source_table` — don't drop it when rebuilding. Its shape and the projection into it live in [src/common/dq.py](../common/dq.py), so no gate writes that SQL itself.
+
+The rules are covered by [tests/test_quality_gate.py](../../tests/test_quality_gate.py), which validates every rule file without needing compute.
 
 ## Design decisions not specified in the requirements
 

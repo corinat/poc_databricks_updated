@@ -10,6 +10,7 @@ Requirements: [flows/flows/03_customers.md](../../flows/flows/03_customers.md), 
 |---|---|---|---|---|---|
 | Bronze | `bronze_customer` | table | `data/customer_data/*.csv` | append + `mergeSchema` | `01_load_bronze_customer.py` |
 | Silver | `silver_customer` | table | `bronze_customer` | overwrite | `02_build_silver_customer.py` |
+| Silver | `silver_dq_quarantine` | table | rows the quality gate rejects | append | `02_build_silver_customer.py` |
 
 Bronze objects live in schema `bronze_raw` and Silver in `silver`, in the catalog chosen by the bundle target (`poc_dev`, `poc_test`, `poc`). In the `dev` target, development mode prefixes schema names with `dev_<user>_`.
 
@@ -72,7 +73,9 @@ Orphaned customers — a `parent_customer_id` pointing at an id that is not pres
 SELECT * FROM silver_customer
 WHERE level = 0 AND parent_customer_id IS NOT NULL
 ```
-- The schema is declared with `CREATE TABLE IF NOT EXISTS`, then filled with `INSERT OVERWRITE` — every row is replaced, since one changed row shifts the level and path of everything below it.
+- `source_file` and `ingested_at` are carried through the dedupe and both branches of the recursion. Beyond lineage, they are the only record of which batch won the dedupe: Bronze holds every delivery of a `customer_id`, so joining back cannot say which one was kept.
+- The rows then go through the quality gate; see [Data quality](#data-quality).
+- The schema is declared with `CREATE TABLE IF NOT EXISTS`, then filled with `insertInto` in overwrite mode — every row is replaced, since one changed row shifts the level and path of everything below it. `insertInto` writes into the existing table rather than replacing it, so the declared schema survives; it resolves by position, so the select pins the column order.
 
 The current data gives three levels — holding company, account, branch:
 
@@ -81,6 +84,31 @@ The current data gives three levels — holding company, account, branch:
 | 201 | 0 | 201 | Northwind Holding |
 | 101 | 1 | 201 | Northwind Holding > Ava Stone |
 | 111 | 2 | 201 | Northwind Holding > Ava Stone > Ava Stone - Warsaw Branch |
+
+## Data quality
+
+The gate runs at the Bronze to Silver boundary, on the finished hierarchy. It has to run there rather than earlier: the recursion that produces `level` and `hierarchy_path` is a recursive CTE and so happens in SQL, and checking before it would mean making the valid frame addressable from SQL through a temp view, which [docs/EXERCISE.md](../../docs/EXERCISE.md) rules out.
+
+Rules live in [checks/silver_customer.yml](../../checks/silver_customer.yml), shipped by the bundle and passed to the notebook as the `checks_path` job parameter.
+
+| Rule | Function | Category | Criticality |
+|---|---|---|---|
+| `customer_id_is_null` | `is_not_null` | completeness | error |
+| `customer_name_is_empty` | `is_not_null_and_not_empty` | completeness | error |
+| `customer_id_is_not_unique` | `is_unique` | uniqueness | error |
+| `parent_customer_id_not_in_silver_customer` | `foreign_key` | referential integrity | warn |
+
+`customer_name_is_empty` uses `trim_strings`, because a name of only spaces is as empty as a `NULL` — which is what the requirement's "required names" is about.
+
+**Orphans are a warning, not an error**, and the reason is stronger than "a dangling reference is not fatal". The check is self-referential: `parent_customer_id` against `customer_id` in the same table. Quarantining an orphan would remove it from Silver while its own children stayed, and those children were not flagged because the check ran before the split — Silver would end up with rows pointing at a parent that is not there. The flow already handles orphans gracefully by making them tree roots, and this rule records them rather than changing that:
+
+```sql
+SELECT * FROM silver_customer WHERE level = 0 AND parent_customer_id IS NOT NULL
+```
+
+`silver_dq_quarantine` is a project-wide table shared by every quality gate, told apart by `source_table` — don't drop it when rebuilding. Its shape and the projection into it live in [src/common/dq.py](../common/dq.py), so no gate writes that SQL itself.
+
+The rules are covered by [tests/test_quality_gate.py](../../tests/test_quality_gate.py), which validates every rule file without needing compute.
 
 ## Design decisions not specified in the requirements
 
@@ -100,6 +128,8 @@ The current data gives three levels — holding company, account, branch:
 | "Latest" for the dedupe | Newest `ingested_at`, then `source_file` | The newest batch to carry a customer wins. `source_file` breaks ties so the result is deterministic when two batches land in the same run and share a timestamp. |
 | Silver schema | Declared, not derived | `silver_customer` is consumed by Gold and the dashboard, so the shape is pinned in DDL. A query that stopped producing these types fails the insert instead of silently changing the table, and `customer_id NOT NULL` turns the "every batch has an id" assumption into something enforced. |
 | `hierarchy_path` separator | `' > '` | The flow asks for "the chain of names from root to this customer" without naming a separator. |
+| `source_file` + `ingested_at` in Silver | Carried through | They are the only record of which batch won the dedupe, which is otherwise lost on write. Dropped when Gold builds `dim_customer`. |
+| Orphan criticality | `warn` | The check is self-referential, so removing an orphan would leave its children pointing at a parent that is no longer there. |
 | Orphaned customers | Start a tree of their own | A recursive CTE anchored only on parentless customers would never reach a customer whose `parent_customer_id` points at a customer that is not in the data, silently losing it and everything below it. The anchor also admits those rows, so nothing is lost. They stay identifiable without an extra column: `level = 0` together with a non-null `parent_customer_id` means the parent was missing. Quarantining them belongs to flow 06. |
 | `NOT EXISTS` for the orphan test | NULL-safe | `parent_customer_id NOT IN (SELECT customer_id FROM deduped)` evaluates to NULL for every row if any `customer_id` in `deduped` is NULL, which would silently restore the dropping behaviour. |
 | Hierarchy cycles | Left to Spark's recursion limit | A cycle in `parent_customer_id` would recurse without end; the recursion level limit stops it and fails the task rather than hanging. |

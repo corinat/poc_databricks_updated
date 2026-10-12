@@ -28,6 +28,12 @@ resources:
           default: ${resources.schemas.silver.name}
         - name: volume_name
           default: ${resources.volumes.input_data.name}
+        # DQX rules for the Bronze to Silver gate, and the directory of
+        # src/common/dq.py which the gate notebook appends to sys.path.
+        - name: checks_path
+          default: ${workspace.file_path}/checks/silver_customer.yml
+        - name: common_path
+          default: ${workspace.file_path}/src/common
 
       tasks:
         # Step 1: land the new batches in Bronze.
