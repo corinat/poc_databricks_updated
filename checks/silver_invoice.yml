@@ -1,0 +1,103 @@
+# DQX checks for the bronze_invoice to silver_invoice gate.
+#
+# Loaded by src/flow04/03_build_silver_invoice.py, which gets this file's path
+# as the checks_path job parameter.
+#
+# These replace a hand-written check that raised RuntimeError when any required
+# field was missing, leaving silver_invoice untouched. The gate keeps the same
+# invoices out of Silver — an error row never reaches it — but publishes the
+# ones that are fine instead of blocking all of them, and records why each was
+# rejected rather than only naming it in a failed task.
+#
+# The fields are extracted by an LLM, so any of them can come back missing.
+# That is what makes completeness the heart of this gate rather than a
+# formality: the five below are the key, the date the invoice is reported
+# under, and the three money columns.
+#
+# Not here, and deliberately: "matching seller/buyer" from the requirement's
+# invoice gate. The PDFs carry the seller's name and tax id but no seller_id,
+# so checking it means resolving against dim_seller — a business join that
+# belongs in Gold.
+
+# ── Completeness ──
+- name: invoice_id_is_null
+  criticality: error
+  check:
+    function: is_not_null
+    arguments:
+      column: invoice_id
+
+- name: invoice_date_is_null
+  criticality: error
+  check:
+    function: is_not_null
+    arguments:
+      column: invoice_date
+
+- name: net_amount_is_null
+  criticality: error
+  check:
+    function: is_not_null
+    arguments:
+      column: net_amount
+
+- name: vat_amount_is_null
+  criticality: error
+  check:
+    function: is_not_null
+    arguments:
+      column: vat_amount
+
+- name: gross_amount_is_null
+  criticality: error
+  check:
+    function: is_not_null
+    arguments:
+      column: gross_amount
+
+# ── Uniqueness ──
+# One row per invoice_id. The dedupe runs first, so this cannot fire for a
+# non-null id; it documents the invariant and would catch a dedupe regression.
+# nulls_distinct defaults to true, so rows whose id is missing are not reported
+# as duplicates of each other — the completeness rule above owns those.
+- name: invoice_id_is_not_unique
+  criticality: error
+  check:
+    function: is_unique
+    arguments:
+      columns:
+        - invoice_id
+
+# ── Validity ──
+# The requirement's own arithmetic: net + VAT = gross. All three are
+# DECIMAL(18,2), so this is exact rather than approximate.
+# An invoice whose totals do not add up is unusable for reporting, so error.
+# A row with a missing amount makes the expression NULL and is not flagged
+# here; the completeness rules above catch it instead.
+- name: net_plus_vat_is_not_gross
+  criticality: error
+  check:
+    function: sql_expression
+    arguments:
+      expression: net_amount + vat_amount = gross_amount
+      msg: net_amount + vat_amount must equal gross_amount
+      columns:
+        - net_amount
+        - vat_amount
+        - gross_amount
+
+# ── Referential integrity ──
+# "valid order ID": the invoice has to bill an order that exists.
+# warn rather than error, for the same reason the other gates' foreign keys are
+# warnings — an invoice for an order that has not loaded yet is still a real
+# invoice, and losing it would understate revenue.
+- name: order_id_not_in_silver_order
+  criticality: warn
+  check:
+    function: foreign_key
+    arguments:
+      columns:
+        - order_id
+      ref_columns:
+        - order_id
+      ref_df_name: silver_order

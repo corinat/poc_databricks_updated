@@ -1,0 +1,67 @@
+# DQX checks for the bronze_seller to silver_seller gate.
+#
+# Loaded by src/flow02/04_build_silver_seller.py, which gets this file's path
+# as the checks_path job parameter.
+#
+# The requirement lists sellers under its dimension gate — "unique keys,
+# required names, valid tax IDs, approved currencies" — which is all four
+# categories.
+
+# ── Completeness ──
+- name: seller_id_is_null
+  criticality: error
+  check:
+    function: is_not_null
+    arguments:
+      column: seller_id
+
+- name: seller_name_is_empty
+  criticality: error
+  check:
+    function: is_not_null_and_not_empty
+    arguments:
+      column: seller_name
+      trim_strings: true
+
+# ── Uniqueness ──
+# The dedupe runs first, so this cannot fire. It documents the invariant.
+# It matters more here than elsewhere: bronze_seller is appended in full on
+# every load, so without the dedupe the same seller would be present once per
+# run.
+- name: seller_id_is_not_unique
+  criticality: error
+  check:
+    function: is_unique
+    arguments:
+      columns:
+        - seller_id
+
+# ── Validity ──
+# "valid tax IDs". The seller is a Polish entity and the invoices print its NIP
+# as 111-111-11-11, so the shape checked is ten digits grouped 3-3-2-2.
+# warn, not error: a malformed tax id is a compliance problem worth recording,
+# but the seller is still joinable and no amount depends on it. A regex is a
+# format check, not a validity proof — a well-formed NIP can still be wrong.
+- name: tax_id_is_not_a_nip
+  criticality: warn
+  check:
+    function: regex_match
+    arguments:
+      column: tax_id
+      regex: '^\d{3}-\d{3}-\d{2}-\d{2}$'
+
+# ── Referential integrity ──
+# "approved currencies": the seller bills in a currency the project knows.
+# bronze_currency is the approved list; it has no Silver table of its own.
+# warn, because the currency here is descriptive — the conversion in Gold uses
+# the order's currency, not the seller's.
+- name: currency_code_not_in_bronze_currency
+  criticality: warn
+  check:
+    function: foreign_key
+    arguments:
+      columns:
+        - currency_code
+      ref_columns:
+        - currency_code
+      ref_df_name: bronze_currency

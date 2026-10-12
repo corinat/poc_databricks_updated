@@ -1,0 +1,41 @@
+# resources/flow05_order_status_pipeline.pipeline.yml
+# Flow 05, step 6 — AUTO CDC into silver_order_status_history.
+#
+# A pipeline rather than a notebook task because AUTO CDC is pipeline-only.
+# It is run by the build_silver_order_status_history task of the
+# load_order_status job, in flow05_order_status_job.job.yml.
+
+resources:
+  pipelines:
+    # Step 6. Owns silver_order_status_history.
+    order_status_history:
+      name: order_status_history
+      serverless: true
+
+      # Silver, so the history table sits beside the other Silver tables
+      # rather than in the Bronze schema its source lives in.
+      catalog: ${var.catalog}
+      schema: ${resources.schemas.silver.name}
+
+      libraries:
+        - file:
+            path: ../src/flow05/06_silver_order_status_history.py
+
+      # DQX, for the quality gate in front of the AUTO CDC flow. A pipeline
+      # declares its Python dependencies here rather than in a job environment.
+      environment:
+        dependencies:
+          - databricks-labs-dqx==0.16.0
+
+      # Read in the pipeline code with spark.conf.get(...), so every path and
+      # table name follows the bundle target instead of being written into the
+      # source file.
+      configuration:
+        source_table: ${var.catalog}.${resources.schemas.bronze_raw.name}.bronze_order_status_changes
+        # Reference table for the order_id foreign key check.
+        order_table: ${var.catalog}.${resources.schemas.silver.name}.silver_order
+        # The shared quarantine table, which this pipeline does not own and
+        # reaches through a sink.
+        quarantine_table: ${var.catalog}.${resources.schemas.silver.name}.silver_dq_quarantine
+        checks_path: ${workspace.file_path}/checks/silver_order_status_history.yml
+        common_path: ${workspace.file_path}/src/common

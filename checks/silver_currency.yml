@@ -1,0 +1,66 @@
+# DQX checks for the bronze_currency to silver_currency gate.
+#
+# Loaded by src/flow01/05_build_silver_currency.py, which gets this file's path
+# as the checks_path job parameter.
+#
+# The requirement's dimension gate is "unique keys, required names, valid tax
+# IDs, valid product prices, approved currencies". Tax ids and prices belong to
+# other dimensions, and "approved currencies" is tautological here — this table
+# IS the approved list. So unique keys and required names are what applies,
+# plus the format of the code every other table joins on.
+#
+# No referential integrity rule, and that is not an omission: a currency is a
+# root dimension. Five other tables point at it; it points at nothing.
+#
+# The uniqueness rule is live here, unlike in the other gates.
+#
+# bronze_currency is written with a full overwrite, so a currency cannot arrive
+# twice across runs and there is nothing for a dedupe to resolve. This gate
+# therefore does not dedupe, which leaves is_unique able to catch what a dedupe
+# would have hidden: two rows for one code in the source file itself. Both rows
+# are then quarantined and the code is absent from the dimension — which is the
+# right outcome, since ambiguous reference data should not be published.
+
+# ── Completeness ──
+- name: currency_code_is_null
+  criticality: error
+  check:
+    function: is_not_null
+    arguments:
+      column: currency_code
+
+# "required names"
+- name: currency_name_is_empty
+  criticality: error
+  check:
+    function: is_not_null_and_not_empty
+    arguments:
+      column: currency_name
+      trim_strings: true
+
+# ── Uniqueness ──
+# "unique keys". A duplicate code makes every foreign key pointing here
+# ambiguous, so both rows are kept out.
+- name: currency_code_is_not_unique
+  criticality: error
+  check:
+    function: is_unique
+    arguments:
+      columns:
+        - currency_code
+
+# ── Validity ──
+# ISO 4217: three uppercase letters. This matters more than it looks — the code
+# is what silver_order, silver_seller and silver_exchange_rate all join on, so
+# a lowercase or padded value here makes their foreign keys miss.
+#
+# warn, not error, and deliberately: removing a malformed code from the
+# dimension makes the downstream misses worse, not better, because then there
+# is certainly no match. Recording it is what helps.
+- name: currency_code_is_not_iso_4217
+  criticality: warn
+  check:
+    function: regex_match
+    arguments:
+      column: currency_code
+      regex: '^[A-Z]{3}$'

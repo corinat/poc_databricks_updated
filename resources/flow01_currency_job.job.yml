@@ -15,15 +15,45 @@ resources:
           default: ${resources.schemas.bronze_raw.name}
         - name: volume_name
           default: ${resources.volumes.input_data.name}
+        - name: silver_schema
+          default: ${resources.schemas.silver.name}
+        - name: gold_schema
+          default: ${resources.schemas.gold.name}
+        # DQX rules for the Bronze to Silver gate, and the directory of
+        # src/common/dq.py which the gate notebook appends to sys.path.
+        - name: checks_path
+          default: ${workspace.file_path}/checks/silver_currency.yml
+        - name: common_path
+          default: ${workspace.file_path}/src/common
 
       tasks:
         - task_key: load_bronze_currency
           notebook_task:
             notebook_path: ../src/flow01/01_load_bronze_currency.py
           environment_key: default
+
+        # The quality gate. Runs only if the load succeeded, so a failed
+        # delivery is not silently left out of Silver.
+        - task_key: build_silver_currency
+          depends_on:
+            - task_key: load_bronze_currency
+          notebook_task:
+            notebook_path: ../src/flow01/05_build_silver_currency.py
+          environment_key: default
+
+        # Publish the dimension. Depends on Silver, so the projection is never
+        # taken from a Silver table a failed quality gate left half-written.
+        - task_key: build_gold_dim_currency
+          depends_on:
+            - task_key: build_silver_currency
+          notebook_task:
+            notebook_path: ../src/flow01/06_build_gold_dim_currency.py
+          environment_key: default
       environments:
         - environment_key: default
           spec:
             environment_version: "6"
+            # DQX, for the Bronze to Silver quality gate.
+            dependencies: ${var.silver_job_dependencies}
       queue:
         enabled: true

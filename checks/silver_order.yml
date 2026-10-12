@@ -81,6 +81,23 @@
 # built from Silver, so a check at the Bronze to Silver boundary cannot depend
 # on it. bronze_product is used because flow 02 publishes as-is and has no
 # Silver table of its own.
+#
+# The three are not at the same level, and the test is whether the missing
+# reference breaks a calculation or only a description.
+#
+#   customer_id, product_id   descriptive. The join yields NULL attributes and
+#                             every amount stays correct, so the order is
+#                             usable and the gap is recorded: warn.
+#   currency_code             arithmetic. Without a known currency there is no
+#                             rate, so order_amount_pln cannot be computed and
+#                             the order would sit in Gold with a NULL where a
+#                             converted amount belongs — understating a PLN
+#                             total silently. Silver is meant to be conformed,
+#                             so such a row is kept out: error.
+#
+# An order held back this way is not lost. It stays in Bronze, which is
+# replayable, and in the quarantine with its reason; once the currency is in
+# the reference data a re-run brings it into Silver.
 - name: customer_id_not_in_silver_customer
   criticality: warn
   check:
@@ -104,7 +121,7 @@
       ref_df_name: bronze_product
 
 - name: currency_code_not_in_bronze_currency
-  criticality: warn
+  criticality: error
   check:
     function: foreign_key
     arguments:

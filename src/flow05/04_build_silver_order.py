@@ -27,6 +27,19 @@
 # with older rows NULL, naming sales_channel and flow 05. Rows from the two
 # deliveries whose files have no such field keep NULL.
 #
+# source_file and ingested_at are carried through too, and for a reason beyond
+# lineage: they are the only record of which delivery won the dedupe. Once this
+# table is written that decision is otherwise gone — Bronze holds every
+# delivery of an order_id, so joining back cannot say which one was kept
+# without re-running the dedupe.
+#
+# ingested_at here is when the row was DELIVERED, the value Bronze stamped, not
+# when this notebook ran. "When was this Silver row last rebuilt" would be a
+# different column, and conflating the two is the trap worth avoiding.
+#
+# Neither belongs in Gold. FACT_ORDER is the Gold shape, so fact_order should
+# name its columns rather than SELECT *, and drop these two.
+#
 # Which delivery wins a replayed order_id is decided by ingested_at, so it is
 # whichever of the three landed last. The 8 orders that orders_schema_change
 # .parquet replays therefore keep their sales_channel while that delivery is
@@ -50,10 +63,24 @@
 # to make it addressable from SQL is what EXERCISE.md rules out.
 
 # COMMAND ----------
+import sys
+
 import yaml
 from databricks.labs.dqx.engine import DQEngine
 from databricks.sdk import WorkspaceClient
 from delta.tables import DeltaTable
+
+# COMMAND ----------
+# ── The shared quality-gate helpers ──
+# src/common/dq.py is a plain module, not a notebook. Its directory is given by
+# the common_path job parameter, resolved from workspace.file_path, and appended
+# to sys.path so the import below resolves in every bundle target.
+dbutils.widgets.text("common_path", "../common")
+common_path = dbutils.widgets.get("common_path")
+if common_path not in sys.path:
+    sys.path.append(common_path)
+
+from dq import ensure_quarantine_table, write_quarantine
 
 # COMMAND ----------
 # ── Parameters (passed by DABs job as job-level parameters) ──
@@ -90,7 +117,8 @@ with open(checks_path) as checks_file:
 # ── Declared schema ──
 # Silver is consumed by Gold and the dashboard, so the shape is declared once
 # here rather than derived from the query. The columns and their types are
-# FACT_ORDER from DATA_MODEL.md, in its order, plus sales_channel.
+# FACT_ORDER from DATA_MODEL.md, in its order, plus sales_channel and the two
+# tracking columns carried from Bronze.
 # order_id is NOT NULL: it is the merge key, and a row without one could not be
 # matched on a later run. The DQX rule of the same name is what keeps such a
 # row out, so this constraint is the backstop rather than the gate.
@@ -105,35 +133,18 @@ CREATE TABLE IF NOT EXISTS {table_name} (
     unit_price    DECIMAL(18,2),
     net_amount    DECIMAL(18,2),
     status        STRING,
-    sales_channel STRING
+    sales_channel STRING,
+    source_file   STRING,
+    ingested_at   TIMESTAMP
 )
 """)
 
 # COMMAND ----------
 
 # ── The shared quarantine table ──
-# One table for every source, as flow 06 section 2 asks. The sources have
-# different columns, so the failing row is held as VARIANT rather than as a
-# column per field — the same approach bronze_invoice already uses.
-#
-# failed_checks carries only the rule name and its message. DQX's own result
-# struct has ten fields, most of them its bookkeeping, and pinning that shape
-# in DDL would recouple this table to the library version.
-#
-# severity is derived from which result column was populated: error rows are
-# here instead of in silver_order, warn rows are here as well as in it.
-#
-# CREATE TABLE IF NOT EXISTS, because every Bronze to Silver gate writes here
-# and none of them owns the table.
-spark.sql(f"""
-CREATE TABLE IF NOT EXISTS {quarantine_table} (
-    source_table   STRING NOT NULL,
-    severity       STRING,
-    row_data       VARIANT,
-    failed_checks  ARRAY<STRUCT<name STRING, message STRING>>,
-    quarantined_at TIMESTAMP
-)
-""")
+# Shared with every other Bronze to Silver gate, so its shape and the
+# projection into it live in src/common/dq.py rather than here.
+ensure_quarantine_table(spark, quarantine_table)
 
 # COMMAND ----------
 
@@ -151,7 +162,9 @@ SELECT
     CAST(unit_price AS DECIMAL(18,2))   AS unit_price,
     CAST(order_amount AS DECIMAL(18,2)) AS net_amount,
     lower(trim(status))                 AS status,
-    sales_channel
+    sales_channel,
+    source_file,
+    ingested_at
 FROM {bronze_table}
 QUALIFY row_number() OVER (
     PARTITION BY order_id
@@ -189,27 +202,6 @@ valid_orders, flagged_orders = dq_engine.apply_checks_by_metadata_and_split(
 # COMMAND ----------
 
 # ── Record the rows that did not ──
-# _errors and _warnings are NULL rather than empty when a row has none of that
-# kind, which is why the two are combined by CASE rather than by concat.
-(
-    flagged_orders.selectExpr(
-        "'bronze_order' AS source_table",
-        "CASE WHEN _errors IS NOT NULL THEN 'error' ELSE 'warn' END AS severity",
-        """parse_json(to_json(struct(
-               order_id, customer_id, product_id, currency_code, order_date,
-               quantity, unit_price, net_amount, status, sales_channel
-           ))) AS row_data""",
-        """transform(
-               CASE
-                   WHEN _errors IS NULL   THEN _warnings
-                   WHEN _warnings IS NULL THEN _errors
-                   ELSE concat(_errors, _warnings)
-               END,
-               e -> named_struct('name', e.name, 'message', e.message)
-           ) AS failed_checks""",
-        "current_timestamp() AS quarantined_at",
-    )
-    .write
-    .mode("append")
-    .saveAsTable(quarantine_table)
-)
+# The payload columns are derived from the frame inside write_quarantine, so
+# this call cannot fall out of step with silver_order's shape.
+write_quarantine(flagged_orders, "bronze_order", quarantine_table)

@@ -11,7 +11,8 @@ Requirements: [flows/flows/01_currency_exchange_rate.md](../../flows/flows/01_cu
 | Bronze | `bronze_currency` | table | `currencies.csv` | full overwrite | `01_load_bronze_currency.py` |
 | Bronze | `bronze_exchange_rate_hist` | **view** | `exchange_rates_historical.csv` | n/a (view) | `02_create_bronze_exchange_rate_hist.py` |
 | Bronze | `bronze_exchange_rate_current` | table | NBP API | full overwrite | `03_load_bronze_exchange_rate_current.py` |
-| Silver | `silver_exchange_rate` | table | the two exchange-rate Bronze objects | replace changed dates only | `04_build_silver_exchange_rate.py` |
+| Silver | `silver_exchange_rate` | table | the two exchange-rate Bronze objects | replace the incoming dates | `04_build_silver_exchange_rate.py` |
+| Silver | `silver_dq_quarantine` | table | rows the quality gate rejects | append | `04_build_silver_exchange_rate.py` |
 
 All objects live in the catalog chosen by the bundle target (`poc_dev`, `poc_test`, `poc`). Bronze objects are in schema `bronze_raw`, Silver in `silver`. In the `dev` target, development mode prefixes schema names with `dev_<user>_`.
 
@@ -69,11 +70,31 @@ The catalog, schema and volume names are job-level parameters, filled in by the 
 
 ### Step 4 — `silver_exchange_rate`
 
-- Combines the view and the API table with `UNION ALL`. All Bronze columns are kept.
-- No cleaning: the source data has no empty values, extra spaces, invalid rates or duplicate rows.
-- Deduplication with `QUALIFY`: one row per `effectiveDate` + `code`.
-- Changed dates are found by comparing the deduplicated data with Silver (`EXCEPT` on the source columns plus `source_file`). `ingested_at` is left out, so a new API load time alone does not count as a change; `source_file` is included, so a row whose winning source switches between the CSV and the API is detected even when the rate itself is identical.
-- Only the changed dates are rewritten, with `INSERT INTO ... REPLACE USING (effectiveDate)`. This needs Databricks Runtime 17.2+ for unpartitioned tables. The first run creates the table and loads everything.
+- Combines the view and the API table with `unionByName`. All Bronze columns are kept, including `source_file` and `ingested_at`.
+- Deduplication with a window: one row per `effectiveDate` + `code`, the API row first, then the latest `ingested_at`.
+- The schema is declared with `CREATE TABLE IF NOT EXISTS`, so the shape is pinned for Gold rather than taken from whatever the query produced. `` `table` `` needs backticks there, being a reserved word. `code` and `effectiveDate` are `NOT NULL` — they are the pair the write replaces on and the pair uniqueness is defined over.
+- The rows then go through the quality gate; see [Data quality](#data-quality).
+- The rows that pass are written with `.option("replaceUsing", "effectiveDate")`, which deletes the Silver rows whose `effectiveDate` matches an incoming row and inserts the incoming ones. Dates absent from the source keep their existing rows.
+
+## Data quality
+
+The gate runs at the Bronze to Silver boundary. Rules live in [checks/silver_exchange_rate.yml](../../checks/silver_exchange_rate.yml), not in the notebook, and the bundle ships the file to the workspace — the notebook receives its path as the `checks_path` job parameter.
+
+| Rule | Function | Category | Criticality |
+|---|---|---|---|
+| `effective_date_is_null` | `is_not_null` | completeness | error |
+| `code_is_null` | `is_not_null` | completeness | error |
+| `effective_date_code_is_not_unique` | `is_unique` | uniqueness | error |
+| `mid_is_not_positive` | `sql_expression` | validity | error |
+| `code_not_in_bronze_currency` | `foreign_key` | referential integrity | warn |
+
+An `error` row goes to `silver_dq_quarantine` and not to Silver. A `warn` row goes to both: a currency missing from reference data is recorded but is not a reason to lose a published rate.
+
+`silver_dq_quarantine` is a project-wide table shared by every quality gate, told apart by `source_table` — don't drop it when rebuilding. Its shape and the projection into it live in [src/common/dq.py](../common/dq.py), so no gate writes that SQL itself.
+
+One interaction worth knowing: `replaceUsing` rewrites a date whenever the incoming data has any row for it. So if one rate for a date is quarantined and another passes, the date is rewritten from the passing rows alone and the quarantined pair disappears from Silver rather than keeping an earlier value. If every row for a date is quarantined, the date is absent from the incoming frame and its existing rows are left alone.
+
+The rules are covered by [tests/test_quality_gate.py](../../tests/test_quality_gate.py), which validates every rule file without needing compute.
 
 ## Design decisions not specified in the requirements
 
@@ -85,6 +106,8 @@ The catalog, schema and volume names are job-level parameters, filled in by the 
 | Which currencies to call | `is_reporting_currency = false`, not a literal `'PLN'` | The flow says "every currency except PLN". The flag in `currencies.csv` marks exactly that row, so the rule is read from the data instead of being hardcoded, and a change of reporting currency needs no code change. NBP publishes foreign rates against PLN, so there is no endpoint for the reporting currency itself. The condition is stated directly rather than defaulting a missing flag, so only currencies the file explicitly marks `false` are called. |
 | `ingested_at` in the view | File modification time | A view has no load moment of its own. |
 | Which row wins on a duplicate | **NBP API first**, then latest `ingested_at` | Flow 06 asks to "define what latest means". The API is the bank's own published source; the CSV is a copy. |
+| Silver schema | Declared, not derived | `silver_exchange_rate` is consumed by Gold, so the shape is pinned in DDL. A query that stopped producing these types fails the write instead of quietly changing the table. |
+| Foreign key criticality | `warn` | A currency missing from reference data must not cost a published rate. |
 | Silver column names | Same as Bronze | No renaming required by the flow; renaming to the data model names can happen in Gold. |
 | File location | `/Volumes/<catalog>/bronze_raw/input_data/data/` | All source files are uploaded to one `data` folder; notebooks point at exact file names. |
 

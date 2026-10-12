@@ -1,0 +1,52 @@
+# resources/flow05_order_status_job.job.yml
+# Flow 05, step 6 — the status change feed, and the pipeline that turns it into
+# SCD Type 2 history.
+#
+# The pipeline itself is in flow05_order_status_pipeline.pipeline.yml; this job
+# lands the feed in Bronze and then runs it.
+#
+# Separate from flow05_order_job.job.yml because the two halves share no data:
+# the feed is a different file with different columns, and
+# silver_order_status_history is built from it alone.
+#
+# Trigger: none. Flow 05 specifies none.
+
+resources:
+  jobs:
+    # Step 6. The status change feed and the SCD Type 2 history built from it.
+    # No DQX dependency: this half has no Bronze to Silver gate yet, because
+    # silver_order_status_history is produced by a pipeline and a pipeline has
+    # no environments block to carry the library.
+    load_order_status:
+      name: load_order_status
+
+      # Job-level parameters: passed to every task, read in notebooks via dbutils.widgets.
+      parameters:
+        - name: catalog
+          default: ${var.catalog}
+        - name: bronze_schema
+          default: ${resources.schemas.bronze_raw.name}
+        - name: volume_name
+          default: ${resources.volumes.input_data.name}
+
+      tasks:
+        # Land the status change feed in Bronze.
+        - task_key: load_bronze_order_status_changes
+          notebook_task:
+            notebook_path: ../src/flow05/05_load_bronze_order_status_changes.py
+          environment_key: default
+
+        # Then rebuild the SCD Type 2 history from it. Depends on the landing,
+        # so the feed is always in Bronze before the history is recomputed.
+        - task_key: build_silver_order_status_history
+          depends_on:
+            - task_key: load_bronze_order_status_changes
+          pipeline_task:
+            pipeline_id: ${resources.pipelines.order_status_history.id}
+
+      environments:
+        - environment_key: default
+          spec:
+            environment_version: "6"
+      queue:
+        enabled: true

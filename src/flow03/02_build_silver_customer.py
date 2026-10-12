@@ -16,9 +16,35 @@
 #   A customer whose parent is not in the data starts a tree of its own, so no
 #   row is lost. Those rows are the ones with level = 0 and a
 #   parent_customer_id that is set.
+# - Quality gate: DQX, at the Bronze to Silver boundary. Rules are in
+#   checks/silver_customer.yml, not in this notebook. It runs on the finished
+#   hierarchy, because the recursion has to happen in SQL and checking earlier
+#   would need a temp view, which EXERCISE.md rules out.
+# - source_file and ingested_at are carried through. Beyond lineage, they are
+#   the only record of which batch won the dedupe — Bronze holds every delivery
+#   of a customer_id, so joining back cannot say which one was kept.
 # - Write mode: INSERT OVERWRITE into a table whose schema is declared here,
 #   so the shape is pinned for Gold and the dashboard. One changed row shifts
 #   the level and path of everything below it, so the table is rebuilt in full.
+
+# COMMAND ----------
+import sys
+
+import yaml
+from databricks.labs.dqx.engine import DQEngine
+from databricks.sdk import WorkspaceClient
+
+# COMMAND ----------
+# ── The shared quality-gate helpers ──
+# src/common/dq.py is a plain module, not a notebook. Its directory is given by
+# the common_path job parameter, resolved from workspace.file_path, and appended
+# to sys.path so the import below resolves in every bundle target.
+dbutils.widgets.text("common_path", "../common")
+common_path = dbutils.widgets.get("common_path")
+if common_path not in sys.path:
+    sys.path.append(common_path)
+
+from dq import ensure_quarantine_table, write_quarantine
 
 # COMMAND ----------
 # ── Parameters (passed by DABs job as job-level parameters) ──
@@ -31,10 +57,12 @@ _dev_silver_schema = f"dev_{_user}_silver"
 dbutils.widgets.text("catalog", "poc_dev")
 dbutils.widgets.text("bronze_schema", _dev_bronze_schema)
 dbutils.widgets.text("silver_schema", _dev_silver_schema)
+dbutils.widgets.text("checks_path", "../../checks/silver_customer.yml")
 
 catalog = dbutils.widgets.get("catalog")
 bronze_schema = dbutils.widgets.get("bronze_schema")
 silver_schema = dbutils.widgets.get("silver_schema")
+checks_path = dbutils.widgets.get("checks_path")
 
 bronze_table = f"{catalog}.{bronze_schema}.bronze_customer"
 table_name = f"{catalog}.{silver_schema}.silver_customer"
@@ -70,20 +98,29 @@ CREATE TABLE IF NOT EXISTS {table_name} (
     parent_customer_id INT,
     level              INT,
     hierarchy_path     STRING,
-    root_customer_id   INT
+    root_customer_id   INT,
+    source_file        STRING,
+    ingested_at        TIMESTAMP
 )
 """)
 
 # COMMAND ----------
 
+# Pinned column order, matching the DDL above, so the written frame cannot
+# drift from the table. insertInto resolves by position.
+SILVER_COLUMNS = [
+    "customer_id", "customer_name", "country_code", "parent_customer_id",
+    "level", "hierarchy_path", "root_customer_id",
+    "source_file", "ingested_at",
+]
+
+# COMMAND ----------
+
 # ── Clean, dedupe, then walk the hierarchy ──
-# INSERT OVERWRITE replaces every row: one changed row shifts the level and
-# path of everything below it, so the table is rebuilt in full.
-# The final SELECT lists the columns in the order declared above.
+# No write here: the result is the frame the checks run against.
 # A cycle in parent_customer_id would recurse forever; Spark's recursion level
 # limit stops it and fails the task instead.
-spark.sql(f"""
-INSERT OVERWRITE {table_name}
+customers = spark.sql(f"""
 WITH RECURSIVE cleaned AS (
     SELECT
         CAST(trim(customer_id) AS INT)                    AS customer_id,
@@ -97,7 +134,8 @@ WITH RECURSIVE cleaned AS (
 
 -- One row per customer_id, newest batch first.
 deduped AS (
-    SELECT customer_id, customer_name, country_code, parent_customer_id
+    SELECT customer_id, customer_name, country_code, parent_customer_id,
+           source_file, ingested_at
     FROM cleaned
     QUALIFY row_number() OVER (
         PARTITION BY customer_id
@@ -121,7 +159,9 @@ hierarchy AS (
         parent_customer_id,
         0             AS level,
         customer_name AS hierarchy_path,
-        customer_id   AS root_customer_id
+        customer_id   AS root_customer_id,
+        source_file,
+        ingested_at
     FROM deduped AS child
     WHERE child.parent_customer_id IS NULL
      OR NOT EXISTS (
@@ -139,7 +179,9 @@ hierarchy AS (
         child.parent_customer_id,
         parent.level + 1,
         concat(parent.hierarchy_path, ' > ', child.customer_name),
-        parent.root_customer_id
+        parent.root_customer_id,
+        child.source_file,
+        child.ingested_at
     FROM deduped AS child
     JOIN hierarchy AS parent
       ON child.parent_customer_id = parent.customer_id
@@ -152,6 +194,48 @@ SELECT
     parent_customer_id,
     level,
     hierarchy_path,
-    root_customer_id
+    root_customer_id,
+    source_file,
+    ingested_at
 FROM hierarchy
 """)
+
+# COMMAND ----------
+
+# ── Apply the checks ──
+# The reference frame is this same frame: the orphan rule asks whether a
+# parent_customer_id is among the customer_ids present, which is a question
+# about the table itself.
+with open(checks_path) as checks_file:
+    checks = yaml.safe_load(checks_file)
+
+dq_engine = DQEngine(WorkspaceClient())
+
+valid_customers, flagged_customers = dq_engine.apply_checks_by_metadata_and_split(
+    customers, checks, ref_dfs={"silver_customer": customers}
+)
+
+# COMMAND ----------
+
+# ── Rewrite the table with the customers that passed ──
+# INSERT OVERWRITE replaces every row: one changed row shifts the level and
+# path of everything below it, so the table is rebuilt in full.
+# insertInto rather than saveAsTable: it writes into the existing table instead
+# of replacing it, so the declared schema survives. It resolves columns by
+# position, so the select pins the order.
+(
+    valid_customers
+    .select(*SILVER_COLUMNS)
+    .write.mode("overwrite")
+    .insertInto(table_name)
+)
+
+# COMMAND ----------
+
+# ── Record the customers that did not ──
+# Shared with every other Bronze to Silver gate, so its shape and the
+# projection into it live in src/common/dq.py rather than here.
+quarantine_table = f"{catalog}.{silver_schema}.silver_dq_quarantine"
+
+ensure_quarantine_table(spark, quarantine_table)
+write_quarantine(flagged_customers, "bronze_customer", quarantine_table)

@@ -48,6 +48,12 @@ resources:
         # and prod without the notebook assuming a working directory.
         - name: schema_path
           default: ${workspace.file_path}/docs/invoice_extraction_schema.json
+        # DQX rules for the Bronze to Silver gate, and the directory of
+        # src/common/dq.py which the gate notebook appends to sys.path.
+        - name: checks_path
+          default: ${workspace.file_path}/checks/silver_invoice.yml
+        - name: common_path
+          default: ${workspace.file_path}/src/common
 
       tasks:
         # Step 1: which PDFs are not in bronze_invoice yet. Publishes the list

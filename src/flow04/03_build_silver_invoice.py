@@ -14,9 +14,21 @@
 #   invoice can arrive twice as two differently named PDFs.
 # - The extraction is an LLM call, so a field can come back missing. Dates and
 #   amounts use try_cast, which yields NULL instead of failing the query, and
-#   the rows are then checked before anything is written. The task fails naming
-#   the PDFs and the fields at fault, and Silver keeps its previous contents
-#   rather than publishing an invoice with holes in its money columns.
+#   the rows are then put through DQX. An invoice missing any required field is
+#   quarantined and never reaches Silver; the ones that are fine are published.
+# - Quality gate: DQX, at the Bronze to Silver boundary. Rules are in
+#   checks/silver_invoice.yml, not in this notebook.
+#
+# This replaced a hand-written check that raised RuntimeError naming the PDFs
+# and fields at fault, leaving Silver untouched. The gate keeps the same
+# invoices out of Silver, but one bad extraction no longer blocks the other 29
+# from being published, and the reason is recorded per row in the quarantine
+# rather than only in a failed task's message.
+#
+# The consequence to know: silver_invoice can be incomplete. A total summed
+# over it is then wrong without looking wrong. The previous behaviour gave a
+# stale total, which is equally wrong and less visible — here the gap shows up
+# as a quarantine row, which is what flow 07's quarantine alert watches.
 # - Write mode: INSERT OVERWRITE into a table whose schema is declared here.
 #   Clustered by invoice_id rather than partitioned by it: invoice_id is
 #   unique, so Hive partitioning would write one small file per invoice.
@@ -26,6 +38,25 @@
 # seller_id is not in the invoices. The PDFs carry the seller's name, address
 # and tax id, so the id has to be resolved against dim_seller on tax_id, which
 # is a business join and belongs in Gold.
+
+# COMMAND ----------
+import sys
+
+import yaml
+from databricks.labs.dqx.engine import DQEngine
+from databricks.sdk import WorkspaceClient
+
+# COMMAND ----------
+# ── The shared quality-gate helpers ──
+# src/common/dq.py is a plain module, not a notebook. Its directory is given by
+# the common_path job parameter, resolved from workspace.file_path, and appended
+# to sys.path so the import below resolves in every bundle target.
+dbutils.widgets.text("common_path", "../common")
+common_path = dbutils.widgets.get("common_path")
+if common_path not in sys.path:
+    sys.path.append(common_path)
+
+from dq import ensure_quarantine_table, write_quarantine
 
 # COMMAND ----------
 # ── Parameters (passed by DABs job as job-level parameters) ──
@@ -38,10 +69,12 @@ _dev_silver_schema = f"dev_{_user}_silver"
 dbutils.widgets.text("catalog", "poc_dev")
 dbutils.widgets.text("bronze_schema", _dev_bronze_schema)
 dbutils.widgets.text("silver_schema", _dev_silver_schema)
+dbutils.widgets.text("checks_path", "../../checks/silver_invoice.yml")
 
 catalog = dbutils.widgets.get("catalog")
 bronze_schema = dbutils.widgets.get("bronze_schema")
 silver_schema = dbutils.widgets.get("silver_schema")
+checks_path = dbutils.widgets.get("checks_path")
 
 bronze_table = f"{catalog}.{bronze_schema}.bronze_invoice"
 table_name = f"{catalog}.{silver_schema}.silver_invoice"
@@ -155,7 +188,12 @@ deduped AS (
     SELECT {', '.join(SILVER_COLUMNS)}
     FROM flattened
     QUALIFY row_number() OVER (
-        PARTITION BY invoice_id
+        -- coalesce, not invoice_id alone: an extraction that lost the id
+        -- leaves it NULL, and every such row would fall in one partition and
+        -- all but one would be dropped here — so a run would quarantine one
+        -- failed extraction out of several. pdf_path identifies the row
+        -- whatever else is missing, so each survives to be reported.
+        PARTITION BY coalesce(invoice_id, pdf_path)
         ORDER BY ingested_at DESC, pdf_path
     ) = 1
 )
@@ -163,47 +201,47 @@ deduped AS (
 
 # COMMAND ----------
 
-# ── Check every parsed row before writing anything ──
-# Checked against flattened rather than deduped: rows whose invoice_id is
-# missing would all fall in one NULL partition and the dedupe would keep only
-# one of them, so a run would report one failed extraction out of several.
-# pdf_path identifies the row whatever else is missing.
-missing_flags = ", ".join(
-    f"{column} IS NULL AS {column}_missing" for column in REQUIRED_COLUMNS
-)
-missing_filter = " OR ".join(f"{column} IS NULL" for column in REQUIRED_COLUMNS)
+# ── Apply the checks ──
+# The key matches ref_df_name in checks/silver_invoice.yml.
+with open(checks_path) as checks_file:
+    checks = yaml.safe_load(checks_file)
 
-incomplete = spark.sql(f"""
-{flattened_cte}
-SELECT pdf_path, {missing_flags}
-FROM flattened
-WHERE {missing_filter}
-ORDER BY pdf_path
-""").collect()
-
-if incomplete:
-    report = "\n".join(
-        "{}: {}".format(
-            row.pdf_path,
-            ", ".join(
-                column for column in REQUIRED_COLUMNS
-                if row[f"{column}_missing"]
-            ),
-        )
-        for row in incomplete
-    )
-    raise RuntimeError(
-        "Extraction incomplete, silver_invoice left unchanged. "
-        "Fields not found, by file:\n" + report
-    )
-
-# COMMAND ----------
-
-# ── Rewrite the table ──
-# The select lists the columns in the order declared above.
-spark.sql(f"""
-INSERT OVERWRITE {table_name}
+invoices = spark.sql(f"""
 {flattened_cte}
 SELECT {', '.join(SILVER_COLUMNS)}
 FROM deduped
 """)
+
+dq_engine = DQEngine(WorkspaceClient())
+
+ref_dfs = {
+    "silver_order": spark.table(f"{catalog}.{silver_schema}.silver_order"),
+}
+
+valid_invoices, flagged_invoices = dq_engine.apply_checks_by_metadata_and_split(
+    invoices, checks, ref_dfs=ref_dfs
+)
+
+# COMMAND ----------
+
+# ── Rewrite the table with the invoices that passed ──
+# insertInto rather than saveAsTable: it writes into the existing table instead
+# of replacing it, so the declared schema and the clustering survive, which is
+# what INSERT OVERWRITE did before. It resolves columns by position, so the
+# select pins the order to the one declared above.
+(
+    valid_invoices
+    .select(*SILVER_COLUMNS)
+    .write.mode("overwrite")
+    .insertInto(table_name)
+)
+
+# COMMAND ----------
+
+# ── Record the invoices that did not ──
+# Shared with every other Bronze to Silver gate, so its shape and the
+# projection into it live in src/common/dq.py rather than here.
+quarantine_table = f"{catalog}.{silver_schema}.silver_dq_quarantine"
+
+ensure_quarantine_table(spark, quarantine_table)
+write_quarantine(flagged_invoices, "bronze_invoice", quarantine_table)

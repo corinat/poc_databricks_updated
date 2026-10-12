@@ -21,6 +21,11 @@ dev = [
     "ipykernel",
 ]
 
+[tool.pytest.ini_options]
+# src/common holds the shared quality-gate module the gate notebooks import.
+# Putting it on the path here keeps sys.path manipulation out of the tests.
+pythonpath = ["src/common"]
+
 [tool.ruff]
 line-length = 120
 

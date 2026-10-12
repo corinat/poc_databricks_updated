@@ -1,0 +1,67 @@
+# DQX checks for the bronze_customer to silver_customer gate.
+#
+# Loaded by src/flow03/02_build_silver_customer.py, which gets this file's path
+# as the checks_path job parameter.
+#
+# The requirement lists customers under its dimension gate — "unique keys,
+# required names" — so completeness and uniqueness are the substance here.
+#
+# The gate runs on the finished hierarchy, not on the deduped rows, because the
+# recursion that produces level and hierarchy_path is a recursive CTE and so
+# has to run in SQL. Checking earlier would mean making the valid frame
+# addressable from SQL through a temp view, which EXERCISE.md rules out.
+
+# ── Completeness ──
+# customer_id is also NOT NULL in the DDL. This rule is what keeps such a row
+# out, so the constraint is the backstop rather than the gate.
+- name: customer_id_is_null
+  criticality: error
+  check:
+    function: is_not_null
+    arguments:
+      column: customer_id
+
+# "required names": a customer with no name is not usable as a dimension.
+# trim_strings, because a name of only spaces is as empty as a NULL.
+- name: customer_name_is_empty
+  criticality: error
+  check:
+    function: is_not_null_and_not_empty
+    arguments:
+      column: customer_name
+      trim_strings: true
+
+# ── Uniqueness ──
+# The dedupe runs first, so this cannot fire. It documents the invariant and
+# would catch a dedupe regression.
+- name: customer_id_is_not_unique
+  criticality: error
+  check:
+    function: is_unique
+    arguments:
+      columns:
+        - customer_id
+
+# ── Referential integrity ──
+# An orphan: parent_customer_id points at a customer that is not in the data.
+#
+# warn, not error, and the reason is stronger than "it is only a dangling
+# reference". The check is self-referential, so quarantining an orphan would
+# remove it from Silver while its own children stayed — and those children
+# were not flagged, because the check ran before the split. Silver would end up
+# with rows pointing at a parent that is not there, which is worse than keeping
+# the orphan.
+#
+# Flow 03 already handles them gracefully: an orphan becomes a tree root rather
+# than being lost, and stays identifiable as level = 0 with parent_customer_id
+# set. This rule records it rather than changing that.
+- name: parent_customer_id_not_in_silver_customer
+  criticality: warn
+  check:
+    function: foreign_key
+    arguments:
+      columns:
+        - parent_customer_id
+      ref_columns:
+        - customer_id
+      ref_df_name: silver_customer

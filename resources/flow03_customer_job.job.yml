@@ -26,8 +26,16 @@ resources:
           default: ${resources.schemas.bronze_raw.name}
         - name: silver_schema
           default: ${resources.schemas.silver.name}
+        - name: gold_schema
+          default: ${resources.schemas.gold.name}
         - name: volume_name
           default: ${resources.volumes.input_data.name}
+        # DQX rules for the Bronze to Silver gate, and the directory of
+        # src/common/dq.py which the gate notebook appends to sys.path.
+        - name: checks_path
+          default: ${workspace.file_path}/checks/silver_customer.yml
+        - name: common_path
+          default: ${workspace.file_path}/src/common
 
       tasks:
         # Step 1: land the new batches in Bronze.
@@ -43,6 +51,15 @@ resources:
             - task_key: load_bronze_customer
           notebook_task:
             notebook_path: ../src/flow03/02_build_silver_customer.py
+          environment_key: default
+
+        # Publish the dimension. Depends on Silver, so the projection is never
+        # taken from a Silver table a failed quality gate left half-written.
+        - task_key: build_gold_dim_customer
+          depends_on:
+            - task_key: build_silver_customer
+          notebook_task:
+            notebook_path: ../src/flow03/03_build_gold_dim_customer.py
           environment_key: default
 
       environments:
