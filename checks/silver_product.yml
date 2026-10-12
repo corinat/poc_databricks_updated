@@ -1,0 +1,58 @@
+# DQX checks for the bronze_product to silver_product gate.
+#
+# Loaded by src/flow02/03_build_silver_product.py, which gets this file's path
+# as the checks_path job parameter.
+#
+# The requirement lists products under its dimension gate — "unique keys,
+# required names, valid product prices" — so those three are the substance.
+#
+# No referential integrity rule, and that is not an omission: a product is a
+# root dimension. It has no parent and nothing to point at, so there is no
+# foreign key to check. The other gates' fourth category has no equivalent
+# here.
+
+# ── Completeness ──
+- name: product_id_is_null
+  criticality: error
+  check:
+    function: is_not_null
+    arguments:
+      column: product_id
+
+# "required names": a product with no name is not usable as a dimension.
+# trim_strings, because a name of only spaces is as empty as a NULL.
+- name: product_name_is_empty
+  criticality: error
+  check:
+    function: is_not_null_and_not_empty
+    arguments:
+      column: product_name
+      trim_strings: true
+
+# ── Uniqueness ──
+# The dedupe runs first, so this cannot fire. It documents the invariant and
+# would catch a dedupe regression.
+- name: product_id_is_not_unique
+  criticality: error
+  check:
+    function: is_unique
+    arguments:
+      columns:
+        - product_id
+
+# ── Validity ──
+# "valid product prices". warn rather than error, by the same test used in the
+# other gates: does the bad value break a calculation downstream, or only a
+# description? list_price appears in no Gold computation — an order carries its
+# own unit_price, and the marts sum net_amount — so a catalogue price of zero
+# is wrong and worth recording, but it costs no total. The product also stays
+# joinable, which is what dim_product is for.
+- name: list_price_is_not_positive
+  criticality: warn
+  check:
+    function: sql_expression
+    arguments:
+      expression: list_price > 0
+      msg: list_price must be greater than zero
+      columns:
+        - list_price
