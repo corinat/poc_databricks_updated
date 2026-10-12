@@ -1,4 +1,4 @@
-# resources/flow05.yml
+# resources/flow05_order_job.job.yml
 # Flow 05 — orders and order status history.
 #
 # Two jobs and one pipeline, covering the job summary table in
@@ -66,8 +66,24 @@ resources:
         - file:
             path: ../src/flow05/06_silver_order_status_history.py
 
+      # DQX, for the quality gate in front of the AUTO CDC flow. A pipeline
+      # declares its Python dependencies here rather than in a job environment.
+      environment:
+        dependencies:
+          - databricks-labs-dqx==0.16.0
+
+      # Read in the pipeline code with spark.conf.get(...), so every path and
+      # table name follows the bundle target instead of being written into the
+      # source file.
       configuration:
         source_table: ${var.catalog}.${resources.schemas.bronze_raw.name}.bronze_order_status_changes
+        # Reference table for the order_id foreign key check.
+        order_table: ${var.catalog}.${resources.schemas.silver.name}.silver_order
+        # The shared quarantine table, which this pipeline does not own and
+        # reaches through a sink.
+        quarantine_table: ${var.catalog}.${resources.schemas.silver.name}.silver_dq_quarantine
+        checks_path: ${workspace.file_path}/checks/silver_order_status_history.yml
+        common_path: ${workspace.file_path}/src/common
 
   jobs:
     load_order:
@@ -88,6 +104,10 @@ resources:
         # and prod without the notebook assuming a working directory.
         - name: checks_path
           default: ${workspace.file_path}/checks/silver_order.yml
+        # Directory of src/common/dq.py in the deployed bundle, appended to
+        # sys.path by the gate notebook so its import resolves.
+        - name: common_path
+          default: ${workspace.file_path}/src/common
         # Whether this run performs the one-off historical load of
         # orders.parquet. "false" by default: that delivery is a backfill, not
         # something a routine run should repeat. Pass "true" on a fresh
