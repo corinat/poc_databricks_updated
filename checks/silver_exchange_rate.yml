@@ -1,0 +1,73 @@
+# DQX checks for the bronze_exchange_rate_* to silver_exchange_rate gate.
+#
+# Loaded by src/flow01/04_build_silver_exchange_rate.py, which gets this file's
+# path as the checks_path job parameter.
+#
+# The rules are the ones INGESTION_PLAN.md specifies for this entity —
+# "unique (effectiveDate, code), positive mid, supported currency" — plus
+# completeness on the two key columns, which is what makes the uniqueness rule
+# meaningful.
+#
+# Column names are the NBP API's own, which is also how the requirement writes
+# them. Renaming to FACT_EXCHANGE_RATE happens downstream.
+#
+# No catalog or schema appears here: the foreign key names a reference
+# DataFrame and the notebook binds it to a table.
+
+# ── Completeness ──
+- name: effective_date_is_null
+  criticality: error
+  check:
+    function: is_not_null
+    arguments:
+      column: effectiveDate
+
+- name: code_is_null
+  criticality: error
+  check:
+    function: is_not_null
+    arguments:
+      column: code
+
+# ── Uniqueness ──
+# One rate per date and currency. A duplicate would make the replaceUsing
+# write non-deterministic about which rate survives for that date.
+- name: effective_date_code_is_not_unique
+  criticality: error
+  check:
+    function: is_unique
+    arguments:
+      columns:
+        - effectiveDate
+        - code
+
+# ── Validity ──
+# sql_expression takes the condition that must hold: a row fails when the
+# expression is false. A zero or negative rate is unusable, not merely odd —
+# Gold divides and multiplies by it.
+- name: mid_is_not_positive
+  criticality: error
+  check:
+    function: sql_expression
+    arguments:
+      expression: mid > 0
+      msg: mid must be greater than zero
+      columns:
+        - mid
+
+# ── Referential integrity ──
+# "supported currency": the code has to be one the project knows about.
+# bronze_currency is the approved list; it has no Silver table of its own.
+# warn rather than error, for the same reason flow 05's foreign keys are
+# warnings — a currency missing from reference data is not a reason to lose a
+# published rate.
+- name: code_not_in_bronze_currency
+  criticality: warn
+  check:
+    function: foreign_key
+    arguments:
+      columns:
+        - code
+      ref_columns:
+        - currency_code
+      ref_df_name: bronze_currency
