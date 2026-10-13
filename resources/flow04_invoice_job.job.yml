@@ -41,6 +41,8 @@ resources:
           default: ${resources.schemas.bronze_raw.name}
         - name: silver_schema
           default: ${resources.schemas.silver.name}
+        - name: gold_schema
+          default: ${resources.schemas.gold.name}
         - name: volume_name
           default: ${resources.volumes.input_data.name}
         # Absolute path to the extraction schema in the deployed bundle.
@@ -91,6 +93,16 @@ resources:
             - task_key: for_each_invoice
           notebook_task:
             notebook_path: ../src/flow04/03_build_silver_invoice.py
+          environment_key: default
+
+        # Publish the fact, resolving seller_id against dim_seller. Depends on
+        # Silver, so the projection is never taken from a Silver table a failed
+        # quality gate left half-written.
+        - task_key: build_gold_fact_invoice
+          depends_on:
+            - task_key: build_silver_invoice
+          notebook_task:
+            notebook_path: ../src/flow04/04_build_gold_fact_invoice.py
           environment_key: default
 
       environments:

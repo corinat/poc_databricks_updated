@@ -15,6 +15,13 @@ variables:
   # place rather than in each job file. The version is pinned because DQX
   # documents breaking changes between releases.
   # type: complex is required: a variable whose default is a list.
+  # Host of the NBP exchange rate API. One place, because three things depend
+  # on it: the Unity Catalog HTTP connection, the request URL written into
+  # source_file, and the prefix fact_exchange_rate matches to label a rate's
+  # source. If they drift, every rate is silently labelled as coming from the
+  # historical CSV.
+  nbp_api_host:
+    default: "https://api.nbp.pl"
   silver_job_dependencies:
     type: complex
     default:

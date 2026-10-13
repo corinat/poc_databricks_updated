@@ -14,8 +14,9 @@
 #   becomes net_amount.
 # - Quality gate: DQX, at the Bronze to Silver boundary, per flow 06 section 2.
 #   Rules are in checks/silver_order.yml, not in this notebook.
-# - Write mode: merge/upsert on order_id for the rows that pass; append for the
-#   rows that do not.
+# - Write mode: merge/upsert on order_id for the rows that pass, with rows the
+#   gate no longer passes deleted, so Silver holds exactly the current valid
+#   set; append for the rows that do not pass.
 #
 # This table answers "what is this order now". What happened to it over time is
 # silver_order_status_history, built by its own pipeline from the status change
@@ -80,7 +81,7 @@ common_path = dbutils.widgets.get("common_path")
 if common_path not in sys.path:
     sys.path.append(common_path)
 
-from dq import ensure_quarantine_table, write_quarantine
+from dq import ensure_quarantine_table, require_references, write_quarantine
 
 # COMMAND ----------
 # ── Parameters (passed by DABs job as job-level parameters) ──
@@ -184,18 +185,36 @@ ref_dfs = {
     "bronze_currency": spark.table(f"{catalog}.{bronze_schema}.bronze_currency"),
 }
 
+# The currency foreign key is an error rather than a warning, and the write
+# below can delete, so an empty bronze_currency would reject every order and
+# empty silver_order from a run that looked successful. This fails instead,
+# naming the table.
+require_references(ref_dfs)
+
 valid_orders, flagged_orders = dq_engine.apply_checks_by_metadata_and_split(
     orders, checks, ref_dfs=ref_dfs
 )
 
 # COMMAND ----------
 
-# ── Upsert the rows that passed ──
+# ── Upsert the rows that passed, and drop what no longer passes ──
+# The third clause is what makes the gate able to take a row back out. The
+# first two only add and update: a row that was valid, reached Silver, and has
+# since stopped passing — because a rule tightened, or its reference data
+# changed, or it was removed from Bronze — is absent from valid_orders but
+# would stay in the table for ever. whenNotMatchedBySourceDelete removes it,
+# so Silver holds exactly what the gate currently passes.
+#
+# The consequence to know: Silver mirrors the gate, so an empty valid set
+# empties the table. That is the same exposure every gate written with a full
+# overwrite already has, and Delta time travel is the way back —
+# RESTORE TABLE ... TO VERSION AS OF.
 (
     DeltaTable.forName(spark, table_name).alias("target")
     .merge(valid_orders.alias("source"), "target.order_id = source.order_id")
     .whenMatchedUpdateAll()
     .whenNotMatchedInsertAll()
+    .whenNotMatchedBySourceDelete()
     .execute()
 )
 

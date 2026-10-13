@@ -35,8 +35,15 @@ table_name = f"{catalog}.{bronze_schema}.bronze_exchange_rate_current"
 # Unity Catalog HTTP connection to the NBP API (created in the next cell).
 connection_name = "nbp_api"
 
-# Base URL, used to fill source_file.
-NBP_RATES_URL = "https://api.nbp.pl/api/exchangerates/rates/A"
+# The API host comes from the nbp_api_host job parameter rather than being
+# written here, because the Gold build matches the same prefix to label where a
+# rate came from. See databricks.yml.
+dbutils.widgets.text("nbp_api_host", "https://api.nbp.pl")
+nbp_api_host = dbutils.widgets.get("nbp_api_host")
+
+# Base path and the table A rates path, built from the host.
+NBP_BASE_PATH = "/api/exchangerates"
+NBP_RATES_URL = f"{nbp_api_host}{NBP_BASE_PATH}/rates/A"
 
 # COMMAND ----------
 
@@ -47,9 +54,9 @@ spark.sql(f"""
 CREATE CONNECTION IF NOT EXISTS {connection_name}
 TYPE HTTP
 OPTIONS (
-    host 'https://api.nbp.pl',
+    host '{nbp_api_host}',
     port '443',
-    base_path '/api/exchangerates',
+    base_path '{NBP_BASE_PATH}',
     bearer_token 'not-used'
 )
 """)

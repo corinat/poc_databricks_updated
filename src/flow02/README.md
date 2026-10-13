@@ -99,10 +99,13 @@ No referential integrity rule, and that is not an omission: a product is a root 
 | `seller_id_is_null` | `is_not_null` | completeness | error |
 | `seller_name_is_empty` | `is_not_null_and_not_empty` | completeness | error |
 | `seller_id_is_not_unique` | `is_unique` | uniqueness | error |
+| `tax_id_is_not_unique` | `is_unique` | uniqueness | error |
 | `tax_id_is_not_a_nip` | `regex_match` | validity | warn |
 | `currency_code_not_in_bronze_currency` | `foreign_key` | referential integrity | warn |
 
-The tax id check is a **format** check, not a validity proof: ten digits grouped 3-3-2-2, as the invoices print the seller's NIP. A well-formed NIP can still be the wrong one. It is a warning because the seller stays joinable and no amount depends on it.
+`tax_id` is checked for uniqueness as well as format, and the uniqueness rule reaches further than this flow. `fact_invoice` resolves its `seller_id` by joining the invoices to this dimension on `tax_id`, so a duplicate fans that join out: one invoice becomes two rows and its amounts are counted twice in the marts, with nothing failing — the totals simply grow. Both duplicates are therefore kept out, the lookup misses, and `seller_id` comes out `NULL`. An unattributed invoice is far better than one counted twice. The dedupe is on `seller_id`, not `tax_id`, so duplicates do reach the rule.
+
+The tax id **format** check is a different thing, not a validity proof: ten digits grouped 3-3-2-2, as the invoices print the seller's NIP. A well-formed NIP can still be the wrong one. It is a warning because the seller stays joinable and no amount depends on it.
 
 `silver_dq_quarantine` is a project-wide table shared by every quality gate, told apart by `source_table` — don't drop it when rebuilding. Its shape and the projection into it live in [src/common/dq.py](../common/dq.py), so no gate writes that SQL itself.
 

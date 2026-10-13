@@ -8,7 +8,9 @@
 #
 # - Combine bronze_exchange_rate_hist (CSV view) and
 #   bronze_exchange_rate_current (API).
-# - Keep all columns from Bronze.
+# - Keep all columns from Bronze, and add rate_source: which of the two
+#   sources the surviving row came from. It is set here because this is the one
+#   place the distinction is unambiguous.
 # - Deduplicate: one row per effectiveDate + code. The NBP API row wins over
 #   the historical CSV row, because the API is the bank's own published
 #   source. Within the same source, the latest ingested_at wins.
@@ -78,18 +80,28 @@ table_name = f"{catalog}.{silver_schema}.silver_exchange_rate"
 # "table" needs no backticks here: it is a column name, not parsed as SQL.
 SILVER_COLUMNS = [
     "table", "currency", "code", "no", "effectiveDate", "mid",
-    "source_file", "ingested_at",
+    "rate_source", "source_file", "ingested_at",
 ]
 
 # COMMAND ----------
 
 # ── Combine both Bronze sources, tagging which one each row came from ──
-# source_priority: 1 = API (wins), 2 = historical CSV. Used for ordering only
-# and dropped before the write.
+# Two tags, from the one point where the distinction cannot be mistaken:
+# source_priority orders the dedupe and is dropped, rate_source is kept.
+#
+# rate_source is written here rather than worked out downstream. Gold declares
+# the column, and the alternative — matching source_file against the API host
+# in the Gold build — would reconstruct a fact that is already known here, and
+# would silently label every rate as coming from the CSV if the two ever
+# disagreed about the host. There is nothing to disagree about this way.
 combined = (
-    spark.table(current_table).withColumn("source_priority", F.lit(1))
+    spark.table(current_table)
+    .withColumn("source_priority", F.lit(1))
+    .withColumn("rate_source", F.lit("NBP_API"))
     .unionByName(
-        spark.table(hist_view).withColumn("source_priority", F.lit(2))
+        spark.table(hist_view)
+        .withColumn("source_priority", F.lit(2))
+        .withColumn("rate_source", F.lit("HISTORICAL_CSV"))
     )
 )
 
@@ -128,6 +140,7 @@ CREATE TABLE IF NOT EXISTS {table_name} (
     no            STRING,
     effectiveDate DATE NOT NULL,
     mid           DECIMAL(18,6),
+    rate_source   STRING,
     source_file   STRING,
     ingested_at   TIMESTAMP
 )

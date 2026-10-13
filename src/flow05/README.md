@@ -137,6 +137,12 @@ Different options, opposite failure modes:
 
 **Write mode:** `MERGE` on `order_id` through the Delta Python API, because the source is the DataFrame DQX returns and a temp view is ruled out by `EXERCISE.md`. `MERGE` needs one row per key, which the dedupe guarantees.
 
+Three clauses, not two. `whenMatchedUpdateAll` and `whenNotMatchedInsertAll` only add and update, so a row that was valid, reached Silver, and has since stopped passing — because a rule tightened, or its reference data changed, or it was removed from Bronze — would stay in the table for ever. `whenNotMatchedBySourceDelete` removes it, so Silver holds exactly what the gate currently passes.
+
+That means Silver mirrors the gate, so an empty valid set empties the table — the same exposure every gate written with a full overwrite already has, with `RESTORE TABLE ... TO VERSION AS OF` as the way back.
+
+One path to an empty valid set is guarded rather than left to time travel. `require_references` in [src/common/dq.py](../common/dq.py) fails the task if a reference frame is empty, naming the table. A `foreign_key` check cannot tell "this value is wrong" from "the reference was never loaded" — it only reports "not found" — so an empty `bronze_currency` would fail the currency rule for every order, and since that rule is an `error` and this write can delete, `silver_order` would be emptied by a run that looked successful. It is the one gate where that combination exists; everywhere else the foreign keys are warnings, so an empty reference flags every row but costs no data.
+
 ## Data quality
 
 Rules live in [checks/silver_order.yml](../../checks/silver_order.yml), shipped by the bundle and passed to the notebook as the `checks_path` parameter.
@@ -175,6 +181,15 @@ An order held back this way is not lost — it stays in Bronze, which is replaya
 ## Order status history
 
 `order_status_changes.parquet` is a real change feed: 27 rows for 12 orders (`O-0001`–`O-0012`), each with a `sequence_num`.
+
+Of those 27 events, 4 are `cancelled`, and a cancellation closes an interval rather than inserting a row. So the history holds **23 rows for 12 orders, of which 8 have a current row** — the 4 cancelled orders keep their history and end with none:
+
+```sql
+SELECT count(*) AS history_rows,
+       count(DISTINCT order_id) AS orders,
+       count(DISTINCT CASE WHEN __END_AT IS NULL THEN order_id END) AS orders_with_current_row
+FROM <catalog>.<silver_schema>.silver_order_status_history;
+```
 
 `05_...` lands it with Auto Loader, with `schemaEvolutionMode: rescue` so the recorded schema stays fixed and drift goes to `_rescued_data` — the table must stay append-only, because the pipeline reads it as a stream.
 
@@ -239,6 +254,8 @@ uv run pytest tests/test_quality_gate.py::test_checks_files_are_valid --noconfte
 | `source_file` + `ingested_at` in `silver_order` | carried through from Bronze | They are the only record of which delivery won the dedupe — otherwise that decision is lost on write, since Bronze holds every delivery of an `order_id`. `silver_invoice` already carries `ingested_at` beyond its `FACT_` shape, so this is consistent. Both are dropped when Gold builds `fact_order`. |
 | "Latest" for the dedupe | `ingested_at`, then `order_date` | The flow says "keep the latest record per key" without defining latest. |
 | Decimal precision | `DECIMAL(18,2)` | `DATA_MODEL.md` says `decimal` without one. Values are whole or 2dp, and `net_amount` is summed downstream after a conversion where float would drift. |
+| `MERGE` with a delete clause | `whenNotMatchedBySourceDelete` | Without it the gate can keep a row out but never take one back out, so a row that stopped passing would stay in Silver for ever. With it, Silver is exactly the current valid set — at the cost that an empty valid set empties the table, which full-overwrite gates already risk and time travel already covers. |
+| Guarding the reference tables | `require_references` before the gate | Only this gate has an `error`-level foreign key together with a write that can delete, so only here does an unloaded reference table empty Silver. It guards an observed failure, not a hypothetical one: a Bronze reference stayed empty because its file was in the wrong folder, and the load reported success because an Auto Loader stream with no new files is not an error. |
 | Row validation in the notebook | only `order_id NOT NULL` in DDL | The flow says "validate keys and amounts" without saying what happens on failure; DQX owns that at this boundary. |
 | `sales_channel` in `silver_order` | carried through, nullable | Not a `FACT_ORDER` column, but a late-delivered column must land nullable rather than be dropped. |
 | Bronze landing for the status feed | separate `bronze_order_status_changes` | The pipeline could read the Parquet directly, but every Bronze row needs `source_file` and `ingested_at`. |

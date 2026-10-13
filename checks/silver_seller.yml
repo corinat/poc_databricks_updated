@@ -36,6 +36,29 @@
       columns:
         - seller_id
 
+# A tax id that belongs to two sellers is not valid reference data, and the
+# consequence reaches further than this table. fact_invoice resolves its
+# seller_id by joining silver_invoice to the seller dimension on tax_id, so a
+# duplicate fans that join out: one invoice becomes two rows, and net_amount
+# and gross_amount are counted twice in the marts. Nothing fails — the totals
+# simply grow.
+#
+# error, by the same test used in every gate: does the bad value break a
+# calculation or only a description? It breaks one. And the outcome is the
+# right one — both duplicates are kept out of the dimension, so the lookup
+# misses and seller_id comes out NULL. An unattributed invoice is far better
+# than one counted twice.
+#
+# The dedupe in the gate is on seller_id, not tax_id, so duplicates here do
+# reach this rule rather than being silently resolved before it.
+- name: tax_id_is_not_unique
+  criticality: error
+  check:
+    function: is_unique
+    arguments:
+      columns:
+        - tax_id
+
 # ── Validity ──
 # "valid tax IDs". The seller is a Polish entity and the invoices print its NIP
 # as 111-111-11-11, so the shape checked is ten digits grouped 3-3-2-2.

@@ -30,6 +30,8 @@ resources:
           default: ${resources.schemas.bronze_raw.name}
         - name: silver_schema
           default: ${resources.schemas.silver.name}
+        - name: gold_schema
+          default: ${resources.schemas.gold.name}
         - name: volume_name
           default: ${resources.volumes.input_data.name}
         # Absolute path to the DQX rules in the deployed bundle.
@@ -129,6 +131,15 @@ resources:
             - task_key: load_orders_schema_change
           notebook_task:
             notebook_path: ../src/flow05/04_build_silver_order.py
+          environment_key: default
+
+        # Publish the fact. Depends on Silver, so the projection is never taken
+        # from a Silver table a failed quality gate left half-written.
+        - task_key: build_gold_fact_order
+          depends_on:
+            - task_key: build_silver_order
+          notebook_task:
+            notebook_path: ../src/flow05/07_build_gold_fact_order.py
           environment_key: default
 
       environments:

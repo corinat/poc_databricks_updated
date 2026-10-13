@@ -56,6 +56,36 @@ def ensure_quarantine_table(spark, table: str) -> None:
     spark.sql(_QUARANTINE_DDL.format(table=table))
 
 
+def require_references(ref_dfs: dict) -> None:
+    """Fail if any reference frame is empty, before a gate reads it.
+
+    A foreign_key check cannot tell "this value is wrong" from "the reference
+    table was never loaded" — it only reports "not found". So an empty
+    reference makes every row fail that rule, and what happens next depends on
+    the rule's criticality and the gate's write mode. Where the rule is an
+    error and the write can delete, the result is an emptied Silver table from a
+    run that looks successful.
+
+    This turns that into a failure that names the table instead. It guards a
+    failure mode that has happened, not a hypothetical one: a Bronze reference
+    table stayed empty because its source file was in the wrong folder, and the
+    load reported success because an Auto Loader stream with no new files is
+    not an error.
+
+    Worth calling only from a gate whose foreign keys are errors. Where they
+    are warnings an empty reference flags every row but costs no data, so the
+    check would only add noise.
+    """
+    empty = sorted(name for name, df in ref_dfs.items() if df.isEmpty())
+    if empty:
+        raise RuntimeError(
+            "Reference tables are empty, so every foreign key check would "
+            "fail and the gate would reject every row: "
+            + ", ".join(empty)
+            + ". Load them and re-run."
+        )
+
+
 def quarantine_rows(flagged_df, source_table: str):
     """Project DQX's flagged rows into the shared quarantine table's shape.
 
