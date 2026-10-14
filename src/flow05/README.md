@@ -46,7 +46,7 @@ So `bronze_order` holds 48 rows: the second and third files replay rows the firs
 
 ### The fourth file is deliberately invalid
 
-`orders_stream_bad_data.parquet` exists so that a run of this project produces a real quarantine row, which EXERCISE deliverable 6 asks for. Without it the quarantine stays empty, because every row in the other three files passes all 46 rules.
+`orders_stream_bad_data.parquet` exists so that a run of this project produces a real quarantine row, which EXERCISE deliverable 6 asks for. Without it the quarantine stays empty, because every row in the other three files passes all 45 rules.
 
 Its name is load-bearing: step 2's Auto Loader filters on `orders_stream*.parquet`, so the file is picked up by the existing stream with no code of its own, and the checkpoint loads it exactly once. Its schema is identical to `orders_stream.parquet` — the same nine columns, the same types, `currency` and `order_amount` under their Bronze names — because Auto Loader runs with `schemaEvolutionMode: addNewColumns` and a stray column would evolve the table rather than be rejected.
 
@@ -281,16 +281,7 @@ Two rows, severity `error`, one failed check each, with the message naming the o
 
 Because they are errors, neither reaches Silver: `silver_order` has 30 orders, not 32.
 
-The `warn` half of the gate — a row that reaches Silver *and* the quarantine — is not demonstrated by a file, because such a row would change every downstream number. It is covered by [tests/test_quality_gate.py](../../tests/test_quality_gate.py), which builds orders in memory, runs the real rule files over them, and asserts that an `error` row is kept out of Silver while a `warn`-only row reaches both. Reference frames are built in memory too, so no table is read and none is written.
-
-```bash
-uv run pytest tests/test_quality_gate.py
-# 1 passed, 2 skipped
-```
-
-Running them is optional; no requirement asks for tests. The one that passes validates all 46 rule definitions through DQX's own validator and needs no Java and no compute, which is the part worth having in CI. The two that exercise the gate need a Spark session and skip when the environment has none — compute is named in the Databricks profile (`serverless_compute_id = auto`, a `cluster_id`, or `SPARK_REMOTE`), never enabled implicitly.
-
-To run all three offline instead, with OSS pyspark and a JDK 17 or 21, see the command in the module docstring of [tests/test_quality_gate.py](../../tests/test_quality_gate.py). It is verified on macOS; Windows needs the same packages but a different invocation, and possibly `winutils.exe`.
+The `warn` half of the gate — a row that reaches Silver *and* the quarantine — is not demonstrated by a file, deliberately: such a row would reach `fact_order` and shift every number in Gold and on the dashboard. Both rows in the bad-data file break an `error` rule for that reason. The `warn` path is exercised by the rules that are warnings on real data, `customer_id_not_in_silver_customer` and `product_id_not_in_bronze_product`, whenever a reference is incomplete.
 
 ## Design decisions
 

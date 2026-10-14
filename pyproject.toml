@@ -16,15 +16,9 @@ dev = [
     # silver_job_dependencies variable. This is here so the editor and ruff
     # resolve the import. Keep the pin equal to the one in databricks.yml.
     "databricks-labs-dqx==0.16.0",
-    "pytest",
     "ruff",
     "ipykernel",
 ]
-
-[tool.pytest.ini_options]
-# src/common holds the shared quality-gate module the gate notebooks import.
-# Putting it on the path here keeps sys.path manipulation out of the tests.
-pythonpath = ["src/common"]
 
 [tool.ruff]
 line-length = 120

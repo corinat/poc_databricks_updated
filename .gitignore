@@ -13,3 +13,4 @@ requirements-dbc.txt
 .python-version
 .DS_Store
 .claude/
+data/.VSCode/

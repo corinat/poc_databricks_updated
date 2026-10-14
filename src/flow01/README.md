@@ -126,7 +126,6 @@ An `error` row goes to `silver_dq_quarantine` and not to Silver. A `warn` row go
 
 One interaction worth knowing: `replaceUsing` rewrites a date whenever the incoming data has any row for it. So if one rate for a date is quarantined and another passes, the date is rewritten from the passing rows alone and the quarantined pair disappears from Silver rather than keeping an earlier value. If every row for a date is quarantined, the date is absent from the incoming frame and its existing rows are left alone.
 
-The rules are covered by [tests/test_quality_gate.py](../../tests/test_quality_gate.py), which validates every rule file without needing compute.
 
 ## Design decisions not specified in the requirements
 

@@ -133,7 +133,6 @@ The tax id **format** check is a different thing, not a validity proof: ten digi
 
 `silver_dq_quarantine` is a project-wide table shared by every quality gate, told apart by `source_table` — don't drop it when rebuilding. Its shape and the projection into it live in [src/common/dq.py](../common/dq.py), so no gate writes that SQL itself.
 
-The rules are covered by [tests/test_quality_gate.py](../../tests/test_quality_gate.py), which validates every rule file without needing compute.
 
 ## Design decisions not specified in the requirements
 

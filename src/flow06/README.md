@@ -171,7 +171,7 @@ Section 1's cleaning and section 2's DQX gates are implemented per flow, at each
 | DQX at the Bronze to Silver boundary | all eight gates |
 | One shared quarantine table | `silver_dq_quarantine` |
 
-46 rules in eight files under [checks/](../../checks):
+45 rules in eight files under [checks/](../../checks):
 
 | File | Rules | Completeness | Uniqueness | Validity | Referential |
 |---|---|---|---|---|---|
@@ -180,13 +180,15 @@ Section 1's cleaning and section 2's DQX gates are implemented per flow, at each
 | `silver_seller.yml` | 6 | 2 | 2 | 1 | 1 |
 | `silver_exchange_rate.yml` | 5 | 2 | 1 | 1 | 1 |
 | `silver_customer.yml` | 5 | 2 | 1 | 1 | 1 |
-| `silver_order_status_history.yml` | 5 | 2 | 1 | 1 | 1 |
+| `silver_order_status_history.yml` | 4 | 2 | — | 1 | 1 |
 | `silver_currency.yml` | 4 | 2 | 1 | 1 | — |
 | `silver_product.yml` | 4 | 2 | 1 | 1 | — |
 
 `silver_currency` and `silver_product` have no referential rule because neither references anything: currency *is* the reference table, and the product catalogue resolves against nothing.
 
-The shape of `silver_dq_quarantine` and the projection into it live in [src/common/dq.py](../common/dq.py), so no gate writes that SQL itself. Every rule file is validated by [tests/test_quality_gate.py](../../tests/test_quality_gate.py) without needing compute.
+`silver_order_status_history` has no uniqueness rule because none can be expressed there. `is_unique` compiles to a window partitioned by the key columns with an unbounded frame, and Structured Streaming rejects a non-time window; that gate reads a stream because `AUTO CDC` requires a streaming source, and DQX 0.16.0's `is_unique` takes no watermark or window argument. `AUTO CDC` resolves a duplicated key itself, keeping one row, so the history cannot gain a duplicate interval — what is lost is the report, not the correctness.
+
+The shape of `silver_dq_quarantine` and the projection into it live in [src/common/dq.py](../common/dq.py), so no gate writes that SQL itself.
 
 ## Design decisions not specified in the requirements
 

@@ -71,25 +71,19 @@
         - order_id
       ref_df_name: silver_order
 
-# ── Uniqueness ──
-# One event per order per position in its sequence. sequence_num is what
-# AUTO CDC orders the history by, so two rows sharing an order_id and a
-# sequence_num make the ordering ambiguous: which of them the SCD Type 2
-# interval closes on would depend on the order the rows happened to arrive in.
+# ── No uniqueness rule, and it is not available ──
+# One event per order per position in its sequence would be the rule to have:
+# sequence_num is what AUTO CDC orders the history by, so two rows sharing an
+# order_id and a sequence_num make the ordering ambiguous.
 #
-# error, so an ambiguous pair goes to the quarantine instead of into the
-# history. The other gates mark uniqueness as an error for the same reason.
+# is_unique cannot express it here. It compiles to a window partitioned by the
+# key columns with an unbounded frame, and Structured Streaming rejects a
+# non-time window — the pipeline fails to start with
+# NON_TIME_WINDOW_NOT_SUPPORTED_IN_STREAMING. This gate reads a stream because
+# AUTO CDC requires a streaming source, and DQX 0.16.0's is_unique takes no
+# watermark or window argument, so there is no streaming form of it.
 #
-# Scope to know: this feed is read as a stream, and DQX validates uniqueness
-# within individual micro-batches only. A duplicate pair arriving in one batch
-# is caught; the same pair split across two batches is not. Nothing stronger is
-# available without keeping state across the stream, and the check is still
-# worth having — a redelivered file arrives as one batch.
-- name: order_id_sequence_num_is_not_unique
-  criticality: error
-  check:
-    function: is_unique
-    arguments:
-      columns:
-        - order_id
-        - sequence_num
+# What stands in for it: AUTO CDC itself. Given two rows with the same key and
+# the same sequence_num it keeps one, so the history cannot gain a duplicate
+# interval. What is lost is the report — an ambiguous pair is resolved silently
+# instead of being quarantined.

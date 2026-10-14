@@ -18,16 +18,24 @@ own README, linked in the last column.
 | `bronze_seller` | table | `sellers_delta/` | append | [02](../src/flow02/README.md) |
 | `bronze_customer` | table | `customer_data/*.csv` | append + `mergeSchema` | [03](../src/flow03/README.md) |
 | `bronze_invoice` | table | `invoices/*.pdf`, as `VARIANT` | append | [04](../src/flow04/README.md) |
-| `bronze_order` | table | three order Parquet deliveries | append, one with `mergeSchema` | [05](../src/flow05/README.md) |
+| `bronze_order` | table | four order Parquet deliveries | append, one with `mergeSchema` | [05](../src/flow05/README.md) |
 | `bronze_order_status_changes` | table | `order_status_changes.parquet` | append, Auto Loader | [05](../src/flow05/README.md) |
 
 `bronze_exchange_rate_hist` is the one view in the project, because flow 01 asks
 for a view rather than a managed table. Everything else is a table, as
 EXERCISE.md requires.
 
-`bronze_order` is written by three notebooks, one per delivery, which is why the
-table holds 48 rows for 30 orders: two deliveries replay rows the first already
-sent, and one adds `sales_channel`.
+`bronze_order` is written by three notebooks and fed by four files, which is why
+the table holds 48 rows for 32 order ids: two deliveries replay rows the first
+already sent, one adds `sales_channel`, and the fourth carries two deliberately
+invalid orders.
+
+That fourth file, `orders_stream_bad_data.parquet`, is what makes EXERCISE
+deliverable 6 reproducible. Anyone who uploads `data/` and runs the flows gets a
+real quarantine row rather than a transcript of one: both its rows break an
+`error` rule, so neither reaches `silver_order`, which stays at 30 orders, and
+no figure in Silver or Gold is affected by it. The two rows and the rule each
+breaks are listed in [flow 05's README](../src/flow05/README.md).
 
 ## Silver — 9 tables
 
