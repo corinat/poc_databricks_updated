@@ -1,0 +1,44 @@
+# resources/flow07_sales_dashboard.dashboard.yml
+# Flow 07 — the Lakeview dashboard.
+#
+# The dashboard is authored in the Databricks editor and exported to the
+# .lvdash.json below, which is the workflow Databricks documents: the file
+# describes how the dashboard deploys, and is not meant to be hand-edited.
+#
+# It reads two Gold marts and nothing else, as flow 07 requires — never Silver
+# or Bronze. gold_datamart_daily_sales_summary feeds the date, currency and
+# category widgets; gold_datamart_order_sales_detail feeds the status mix,
+# because it is the only one of the two carrying order_status and because the
+# summary excludes cancelled orders, so a status mix cannot be built from it.
+#
+# dataset_catalog and dataset_schema, not names written into the JSON.
+#
+# These set the default catalog and schema for every dataset in the dashboard
+# at deploy time, so the same file deploys to dev, test and prod. Two things
+# make this the only way to do it:
+#
+#   Bundle variable substitution does not reach inside the .lvdash.json. A
+#   ${var.catalog} written in there is not resolved, it is sent as literal
+#   text.
+#
+#   These two fields override the DEFAULT catalog and schema. A dataset source
+#   written as a fully qualified poc_dev.dev_user_gold.table is not overridden
+#   at all. So the exported sources are reduced to bare table names before the
+#   file is committed.
+#
+# That last step is a round trip to watch: editing the dashboard in the UI and
+# exporting again re-qualifies the sources, because the editor picks datasets
+# from the catalog. Re-strip them, or the test and prod targets silently read
+# the dev schema.
+#
+# Requires CLI 0.281.0 or newer, which is where dataset_catalog and
+# dataset_schema were added.
+
+resources:
+  dashboards:
+    sales_performance:
+      display_name: Sales Performance
+      file_path: ../src/flow07/sales_performance.lvdash.json
+      warehouse_id: ${var.warehouse_id}
+      dataset_catalog: ${var.catalog}
+      dataset_schema: ${resources.schemas.gold.name}

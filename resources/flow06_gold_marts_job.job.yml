@@ -1,0 +1,183 @@
+# resources/flow06_gold_marts_job.job.yml
+# Flow 06 — the joined marts and the reporting sinks.
+#
+# This job reads the Gold star schema the seven flow jobs publish and builds
+# the mart layer on top of it. It owns no Bronze or Silver step, so it has no
+# DQX dependency: the quality gates run in the jobs that write Silver.
+#
+# Trigger: a table update trigger on the seven Gold tables the marts read.
+# Each flow job publishes one or two of them as its last task, and nothing
+# otherwise connects those jobs to this one — a customer file arriving would
+# refresh dim_customer and leave the marts on yesterday's numbers until someone
+# ran this job by hand. Flow 07 requires the dashboard refresh to be driven by
+# this job rather than by a schedule of its own, so this job has to be driven
+# by the data.
+#
+# ANY_UPDATED, not ALL_UPDATED: the latter fires only once every table in the
+# set has been updated since the last successful run, and dim_seller changes on
+# its nightly schedule while dim_currency changes only when someone approves a
+# currency, so it would almost never fire.
+#
+# wait_after_last_change_seconds resets on each update, so a round of loads
+# that touches several Gold tables produces one rebuild rather than one per
+# table. Five minutes is long enough for the flow jobs to finish publishing and
+# short enough that the dashboard is not stale.
+#
+# Note: dev mode pauses triggers by default; pause_status below keeps this one
+# active in every target.
+#
+# Flow 07's dashboard refresh and its two alerts are the last three tasks of
+# this job, which is what its "Gold build job" refers to. They need a SQL
+# warehouse, which notebook tasks do not: see the warehouse_id variable in
+# databricks.yml.
+#
+# gold_datamart_daily_sales_summary is listed as flow 07's output in
+# INGESTION_PLAN, but flow 06 section 4 unpivots it to build
+# gold_datamart_daily_metrics, so it has to exist before that sink. Flow 07's
+# own task list puts build_gold_datamart_daily_sales_summary in this job, so
+# building it here satisfies both documents.
+
+resources:
+  jobs:
+    build_gold_marts:
+      name: build_gold_marts
+
+      trigger:
+        pause_status: UNPAUSED
+        table_update:
+          table_names:
+            # Flow 01
+            - ${var.catalog}.${resources.schemas.gold.name}.dim_currency
+            - ${var.catalog}.${resources.schemas.gold.name}.fact_exchange_rate
+            # Flow 02
+            - ${var.catalog}.${resources.schemas.gold.name}.dim_product
+            - ${var.catalog}.${resources.schemas.gold.name}.dim_seller
+            # Flow 03
+            - ${var.catalog}.${resources.schemas.gold.name}.dim_customer
+            # Flow 04
+            - ${var.catalog}.${resources.schemas.gold.name}.fact_invoice
+            # Flow 05
+            - ${var.catalog}.${resources.schemas.gold.name}.fact_order
+          condition: ANY_UPDATED
+          wait_after_last_change_seconds: 300
+
+      # One run at a time. Every task here overwrites its table in full, so two
+      # overlapping runs would be writing the same rows. With the queue enabled
+      # below, a trigger that fires mid-run waits rather than being dropped.
+      max_concurrent_runs: 1
+
+      # Job-level parameters: passed to every task, read in notebooks via dbutils.widgets.
+      parameters:
+        - name: catalog
+          default: ${var.catalog}
+        - name: gold_schema
+          default: ${resources.schemas.gold.name}
+
+      tasks:
+        # Section 3: one joined row per order, the source of every sink below.
+        - task_key: build_gold_datamart_order_sales_detail
+          notebook_task:
+            notebook_path: ../src/flow06/01_build_gold_datamart_order_sales_detail.py
+          environment_key: default
+
+        # Daily sales per currency and category, aggregated from the mart
+        # above. Section 4's gold_datamart_daily_metrics unpivots this table,
+        # so it has to be built before it.
+        - task_key: build_gold_datamart_daily_sales_summary
+          depends_on:
+            - task_key: build_gold_datamart_order_sales_detail
+          notebook_task:
+            notebook_path: ../src/flow06/02_build_gold_datamart_daily_sales_summary.py
+          environment_key: default
+
+        # Section 4, first sink: one row per date, one column per approved
+        # currency, plus the total across them.
+        - task_key: build_gold_datamart_sales_by_currency
+          depends_on:
+            - task_key: build_gold_datamart_daily_sales_summary
+          notebook_task:
+            notebook_path: ../src/flow06/03_build_gold_datamart_sales_by_currency.py
+          environment_key: default
+
+        # Section 4, second sink: the summary's five measures, one per row.
+        # Independent of the pivot above, so the two run in parallel.
+        - task_key: build_gold_datamart_daily_metrics
+          depends_on:
+            - task_key: build_gold_datamart_daily_sales_summary
+          notebook_task:
+            notebook_path: ../src/flow06/04_build_gold_datamart_daily_metrics.py
+          environment_key: default
+
+        # The three checks sections 3 and 4 ask for. Last task, and it fails
+        # the job: flow 07's dashboard refresh and alerts hang off this job, so
+        # a failure here stops them running against numbers that did not add
+        # up. Depends on both sinks, since the reconciliation reads one of
+        # them.
+        - task_key: check_marts
+          depends_on:
+            - task_key: build_gold_datamart_sales_by_currency
+            - task_key: build_gold_datamart_daily_metrics
+          notebook_task:
+            notebook_path: ../src/flow06/05_check_marts.py
+          environment_key: default
+
+        # ── Flow 07 ──
+        # Flow 07's task list names build_gold_datamart_daily_sales_summary as
+        # this task's dependency. It depends on check_marts instead, which
+        # depends on the summary transitively and adds one thing: a refresh
+        # cannot run on numbers the reconciliation rejected. The requirement is
+        # "only on success of" that build, and this is that condition plus one.
+        #
+        # No schedule on the dashboard itself, as flow 07 requires — this job
+        # is what drives the refresh.
+        - task_key: refresh_dashboard
+          depends_on:
+            - task_key: check_marts
+          dashboard_task:
+            dashboard_id: ${resources.dashboards.sales_performance.id}
+            warehouse_id: ${var.warehouse_id}
+
+        # The two alerts, after the refresh, so they evaluate the data that was
+        # just published rather than whatever a schedule would have found. Both
+        # run in parallel: neither reads the other's result.
+        #
+        # alert_task, not sql_task with a nested alert. The two are not
+        # interchangeable here: the bundle's alerts resource creates an
+        # Alerts v2 object, which lives at /sql/alerts-v2/{id}, while the
+        # nested sql_task.alert resolves an id against the older /sql/alerts/
+        # path and reports "The SQL entity could not be found" for an alert
+        # that exists. alert_task is the task type that resolves the v2 path;
+        # the CLI has translated paths for it since 0.299.0.
+        #
+        # subscribers is the notification destination flow 07 asks for — "an
+        # alert nobody receives is the same as no alert". It resolves to
+        # whoever deployed the bundle, so no address is committed to the repo.
+        #
+        # warehouse_id is passed even though each alert declares its own: the
+        # task falls back to the alert's warehouse when unset, and naming it
+        # here keeps the job's compute visible in the job definition rather
+        # than only in the alert.
+        - task_key: alert_no_orders_today
+          depends_on:
+            - task_key: refresh_dashboard
+          alert_task:
+            alert_id: ${resources.alerts.alert_no_orders_today.id}
+            warehouse_id: ${var.warehouse_id}
+            subscribers:
+              - user_name: ${workspace.current_user.userName}
+
+        - task_key: alert_quarantine_spike
+          depends_on:
+            - task_key: refresh_dashboard
+          alert_task:
+            alert_id: ${resources.alerts.alert_quarantine_spike.id}
+            warehouse_id: ${var.warehouse_id}
+            subscribers:
+              - user_name: ${workspace.current_user.userName}
+
+      environments:
+        - environment_key: default
+          spec:
+            environment_version: "6"
+      queue:
+        enabled: true

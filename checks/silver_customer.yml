@@ -65,3 +65,27 @@
       ref_columns:
         - customer_id
       ref_df_name: silver_customer
+
+# ── Validity ──
+# country_code is reconciled from the two spellings the deliveries use —
+# `country` in one batch, `country code` in the other — and upper-cased in the
+# notebook, so the only thing left to check is the shape. Both source files
+# carry plain two-letter ISO codes: DE, ES, GB, PL, US.
+#
+# warn rather than error, for the same reason the currency code rule is a
+# warning: a customer whose country arrived as `Poland` or `pl-PL` is still a
+# real customer with a real hierarchy, and dropping it would remove every
+# branch under it from dim_customer. The country is reported on the dashboard,
+# not used to join or convert, so a malformed one costs a mislabelled row
+# rather than a wrong number.
+#
+# A NULL passes: regexp_like returns NULL for a NULL input, which DQX does not
+# treat as a failure. That is intended — customers_dirty.csv has rows with no
+# country at all, and the completeness of that column is not required anywhere.
+- name: country_code_is_not_iso
+  criticality: warn
+  check:
+    function: regex_match
+    arguments:
+      column: country_code
+      regex: ^[A-Z]{2}$

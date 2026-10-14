@@ -13,6 +13,8 @@ Requirements: [flows/flows/02_products_sellers.md](../../flows/flows/02_products
 | Silver | `silver_product` | table | `bronze_product` | overwrite | `03_build_silver_product.py` |
 | Silver | `silver_seller` | table | `bronze_seller` | overwrite | `04_build_silver_seller.py` |
 | Silver | `silver_dq_quarantine` | table | rows the quality gates reject | append | both Silver notebooks |
+| Gold | `dim_product` | table | `silver_product` | full overwrite | `05_build_gold_dim_product.py` |
+| Gold | `dim_seller` | table | `silver_seller` | full overwrite | `06_build_gold_dim_seller.py` |
 
 Bronze objects live in schema `bronze_raw` and Silver in `silver`, in the catalog chosen by the bundle target (`poc_dev`, `poc_test`, `poc`). In the `dev` target, development mode prefixes schema names with `dev_<user>_`.
 
@@ -32,10 +34,14 @@ Defined in [resources/flow02_product_job.job.yml](../../resources/flow02_product
 
 | Job | Tasks | Trigger | Why |
 |---|---|---|---|
-| `load_bronze_product` | `load_bronze_product` → `build_silver_product` | file arrival on `data/products_excel/` | The catalog only changes when a new file lands, so react to the event |
-| `load_bronze_seller` | `load_bronze_seller` → `build_silver_seller` | schedule, nightly 02:00 UTC | Nothing pushes to the Delta folder, so poll instead |
+| `load_bronze_product` | `load_bronze_product` → `build_silver_product` → `build_gold_dim_product` | file arrival on `data/products_excel/` | The catalog only changes when a new file lands, so react to the event |
+| `load_bronze_seller` | `load_bronze_seller` → `build_silver_seller` → `build_gold_dim_seller` | schedule, nightly 02:00 UTC | Nothing pushes to the Delta folder, so poll instead |
 
 Each Silver build depends on its own Bronze load, so a delivery that failed to land is not silently left out of Silver.
+
+The trigger watches the `data/products_excel/` folder, so the workbook has to be uploaded **into** that folder rather than flat into `data/`. A flat upload leaves the folder empty, the trigger never fires, and the notebook reports success having read nothing.
+
+Both dimensions are watched by flow 06's mart job, so publishing either starts a mart rebuild five minutes later. The seller job's nightly schedule therefore rebuilds the marts once a night even when `sellers_delta/` received nothing.
 
 One consequence of the seller job's schedule: its gate now runs nightly. The quarantine is a journal rather than a current-state table, so if the tax id or the currency ever fails a check, a row is appended every night until it is fixed.
 
@@ -72,6 +78,24 @@ Development mode normally pauses triggers and schedules. Both job files set `pau
 - The dedupe is the whole reason the table exists. `bronze_seller` is appended **in full** on every load, so the same seller is present once per run, and `source_file` is the folder name rather than a file name so it cannot tell the deliveries apart. One row per `seller_id`, newest `ingested_at` first.
 
 Both carry `source_file` and `ingested_at` through to Silver. Beyond lineage they are the only record of which delivery won the dedupe — Bronze holds every one, so joining back cannot say which was kept. Neither belongs in Gold: `dim_product` and `dim_seller` should name their columns rather than `SELECT *`.
+
+## Approach — Gold
+
+Each dimension is published by its own job, after that job's Silver step, so a projection is never taken from a Silver table a failed quality gate left half-written. Neither has a quality gate of its own: the project's rules put DQX at the Bronze to Silver boundary.
+
+Flow 02's own document says "Bronze only" and names no Silver or Gold table. The two dimensions exist because the star schema needs them: `dim_product` supplies `product_category` to `gold_datamart_order_sales_detail` and `dim_seller` is what `fact_invoice` resolves `seller_id` against. Letting Bronze feed Gold directly would have meant publishing untyped, undeduplicated, ungated rows into the published contract.
+
+### `dim_product`
+
+A projection — the five columns `DIM_PRODUCT` declares, in its order. `source_file` and `ingested_at` stop at Silver.
+
+`unit_of_measure` is declared and always NULL. The sheet has four columns and none of them is a unit, and it cannot be derived from `unit_price`: a price per piece and a price per kilogram look identical. It is declared rather than omitted for the same reason as `customer_type` in flow 03 — Gold is the published contract, and a table that disagrees with the model is worse than a visible gap.
+
+### `dim_seller`
+
+A projection of the eight columns `DIM_SELLER` declares. Nothing is cast or renamed: `silver_seller`'s columns are already the ones the model asks for, with the types it asks for, which is why this step is short.
+
+`seller_id` is the grain, and `tax_id` is what `fact_invoice` joins on — the invoices carry the seller's tax id but no id, so the resolution happens in flow 04's Gold build. That join is one-to-one only if `tax_id` is unique in this dimension, which the `is_unique` rule on `silver_seller` is what enforces.
 
 ## Data quality
 
