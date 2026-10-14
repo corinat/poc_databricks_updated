@@ -11,10 +11,10 @@
 # - Same columns and types as the view bronze_exchange_rate_hist (step 2).
 # - Write mode: full overwrite. The table only holds the latest snapshot.
 #
-# Databricks native http_request() SQL function + a Unity Catalog
-# HTTP connection (flow step 5: "check first if PySpark/Databricks already solves
-# a step natively before adding an external package").
-# Previous version (Python requests library) is kept below, commented out.
+# The call uses the native http_request() SQL function over a Unity Catalog HTTP
+# connection, as the flow asks: "check first if PySpark/Databricks already
+# solves a step natively before adding an external package". No HTTP package is
+# installed.
 
 # COMMAND ----------
 # ── Parameters (passed by DABs job as job-level parameters) ──
@@ -68,7 +68,8 @@ OPTIONS (
 # rather than a hardcoded 'PLN'. Only currencies explicitly marked false are
 # called; the flag is not defaulted when it is missing.
 # Same columns and types as bronze_exchange_rate_hist.
-# A non-200 response stops the task, like raise_for_status() in the previous version.
+# A non-200 response stops the task rather than landing an empty or partial
+# snapshot, which a full overwrite would otherwise publish as the current rates.
 df = spark.sql(f"""
 WITH currencies AS (
     SELECT currency_code

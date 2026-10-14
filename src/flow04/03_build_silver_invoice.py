@@ -19,16 +19,14 @@
 # - Quality gate: DQX, at the Bronze to Silver boundary. Rules are in
 #   checks/silver_invoice.yml, not in this notebook.
 #
-# This replaced a hand-written check that raised RuntimeError naming the PDFs
-# and fields at fault, leaving Silver untouched. The gate keeps the same
-# invoices out of Silver, but one bad extraction no longer blocks the other 29
-# from being published, and the reason is recorded per row in the quarantine
-# rather than only in a failed task's message.
+# One bad extraction does not hold back the other 29: an error row goes to the
+# quarantine with its reason recorded, and the invoices that passed are
+# published.
 #
 # The consequence to know: silver_invoice can be incomplete. A total summed
-# over it is then wrong without looking wrong. The previous behaviour gave a
-# stale total, which is equally wrong and less visible — here the gap shows up
-# as a quarantine row, which is what flow 07's quarantine alert watches.
+# over it is then wrong without looking wrong. What makes the gap findable
+# rather than silent is the quarantine row, which is what flow 07's quarantine
+# alert watches.
 # - Write mode: INSERT OVERWRITE into a table whose schema is declared here.
 #   Clustered by invoice_id rather than partitioned by it: invoice_id is
 #   unique, so Hive partitioning would write one small file per invoice.

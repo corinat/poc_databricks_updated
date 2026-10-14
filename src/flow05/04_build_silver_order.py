@@ -14,9 +14,9 @@
 #   becomes net_amount.
 # - Quality gate: DQX, at the Bronze to Silver boundary, per flow 06 section 2.
 #   Rules are in checks/silver_order.yml, not in this notebook.
-# - Write mode: merge/upsert on order_id for the rows that pass, with rows the
-#   gate no longer passes deleted, so Silver holds exactly the current valid
-#   set; append for the rows that do not pass.
+# - Write mode: merge/upsert on order_id for the rows that pass, deleting any
+#   row the gate stops passing, so Silver holds exactly the current valid set;
+#   append for the rows that do not pass.
 #
 # This table answers "what is this order now". What happened to it over time is
 # silver_order_status_history, built by its own pipeline from the status change
@@ -197,7 +197,7 @@ valid_orders, flagged_orders = dq_engine.apply_checks_by_metadata_and_split(
 
 # COMMAND ----------
 
-# ── Upsert the rows that passed, and drop what no longer passes ──
+# ── Upsert the rows that passed, and drop what stops passing ──
 # The third clause is what makes the gate able to take a row back out. The
 # first two only add and update: a row that was valid, reached Silver, and has
 # since stopped passing — because a rule tightened, or its reference data

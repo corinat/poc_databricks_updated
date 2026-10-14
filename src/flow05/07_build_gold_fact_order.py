@@ -12,7 +12,7 @@
 # - No quality gate. The project's rules put DQX at the Bronze to Silver
 #   boundary, so by the time a row reaches here it has already passed.
 # - Write mode: full overwrite. The fact is the whole of its source, so there
-#   is nothing to merge — and because silver_order now deletes rows the gate
+#   is nothing to merge — and because silver_order deletes any row the gate
 #   stops passing, an overwrite here keeps the two in step.
 #
 # Three columns stop at Silver.
