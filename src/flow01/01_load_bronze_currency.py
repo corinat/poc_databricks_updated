@@ -31,7 +31,7 @@ catalog = dbutils.widgets.get("catalog")
 bronze_schema = dbutils.widgets.get("bronze_schema")
 volume_name = dbutils.widgets.get("volume_name")
 
-source_path = f"/Volumes/{catalog}/{bronze_schema}/{volume_name}/data/currencies.csv"
+source_path = f"/Volumes/{catalog}/{bronze_schema}/{volume_name}/data/currencies_exchanges/currencies.csv"
 table_name = f"{catalog}.{bronze_schema}.bronze_currency"
 
 # COMMAND ----------

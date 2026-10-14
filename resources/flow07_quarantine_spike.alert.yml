@@ -6,11 +6,20 @@
 # Gold job evaluates it after the dashboard refresh.
 #
 # The threshold is 0, so any row rejected today raises it. "Spike" suggests a
-# tolerance, but a tolerance has to be calibrated against a normal rate, and on
-# clean data the normal rate is zero — all 46 rules pass. A threshold above
+# tolerance, but a tolerance has to be calibrated against a normal rate, and
+# there is no measured normal rate here to calibrate against. A threshold above
 # zero would mean choosing in advance how many rejected rows are acceptable,
-# which is a decision about the data this project does not have grounds to
-# make.
+# which is a decision about the data this project does not have grounds to make.
+#
+# Expect this alert to be triggered on any day the flow 05 job runs.
+# data/orders/orders_stream_bad_data.parquet carries two deliberately
+# invalid orders, so that a run of this project produces the quarantine example
+# EXERCISE deliverable 6 asks for. Both rows break an error rule, so neither
+# reaches Silver and no Gold number is affected — but each Silver rebuild
+# re-evaluates all of Bronze and writes two fresh journal rows, which is what
+# this alert then reports. It is reporting correctly; the rejected rows are
+# supposed to be there. Removing that file from the volume is what returns this
+# alert to a silent baseline.
 #
 # Two things to know about what this counts.
 #

@@ -11,3 +11,5 @@ scratch/**
 requirements-dbc.txt
 .vscode/
 .python-version
+.DS_Store
+.claude/
