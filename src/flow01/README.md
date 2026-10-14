@@ -141,7 +141,7 @@ The rules are covered by [tests/test_quality_gate.py](../../tests/test_quality_g
 | Silver schema | Declared, not derived | `silver_exchange_rate` is consumed by Gold, so the shape is pinned in DDL. A query that stopped producing these types fails the write instead of quietly changing the table. |
 | Foreign key criticality | `warn` | A currency missing from reference data must not cost a published rate. |
 | Silver column names | Same as Bronze | No renaming required by the flow; renaming to the data model names can happen in Gold. |
-| File location | `/Volumes/<catalog>/bronze_raw/input_data/data/` | All source files are uploaded to one `data` folder; notebooks point at exact file names. |
+| File location | `/Volumes/<catalog>/bronze_raw/input_data/data/currencies_exchanges/` | The sources are grouped by domain in the volume, `currencies_exchanges/` for both of flow 01's files, and the two notebooks name their file exactly rather than globbing the folder. |
 
 ## Deploy and run
 

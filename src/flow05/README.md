@@ -312,7 +312,7 @@ The one that passes validates all 46 rule definitions through DQX's own validato
 
 ## Deploy and run
 
-The four Parquet files go in `/Volumes/<catalog>/<bronze_schema>/input_data/data/orders/`.
+The five Parquet files go in `/Volumes/<catalog>/<bronze_schema>/input_data/data/orders/`, which is `data/orders/` in the repo.
 
 ```bash
 databricks bundle deploy -t dev

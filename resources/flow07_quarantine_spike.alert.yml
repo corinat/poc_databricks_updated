@@ -12,7 +12,7 @@
 # which is a decision about the data this project does not have grounds to make.
 #
 # Expect this alert to be triggered on any day the flow 05 job runs.
-# data/data/orders/orders_stream_bad_data.parquet carries two deliberately
+# data/orders/orders_stream_bad_data.parquet carries two deliberately
 # invalid orders, so that a run of this project produces the quarantine example
 # EXERCISE deliverable 6 asks for. Both rows break an error rule, so neither
 # reaches Silver and no Gold number is affected — but each Silver rebuild

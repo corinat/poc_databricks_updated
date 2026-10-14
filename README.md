@@ -27,7 +27,7 @@ The sources arrived as one flat directory. They are grouped here by domain, whic
 is what the loads expect:
 
 ```
-data/data/
+data/
   currencies_exchanges/   currencies.csv, exchange_rates_historical.csv
   customer_data/          customers.csv, customers_dirty.csv
   orders/                 orders.parquet, orders_stream.parquet,
@@ -38,14 +38,15 @@ data/data/
   sellers_delta/          a Delta table directory, read as-is
 ```
 
-The repo mirrors the volume one level down, so `data/data/orders/` here is
+The volume has its own `data/` folder, so this directory maps onto it directly:
 
-```
-/Volumes/<catalog>/<bronze_schema>/input_data/data/orders/
-```
+| here | in the volume |
+|---|---|
+| `data/` | `/Volumes/<catalog>/<bronze_schema>/input_data/data/` |
+| `data/orders/orders.parquet` | `/Volumes/.../input_data/data/orders/orders.parquet` |
 
-there. Upload the folders as they are. The volume and the schemas are created by
-the bundle, so deploy before uploading.
+Upload the `data` folder into the volume and the paths line up. The volume and
+the schemas are created by the bundle, so deploy before uploading.
 
 A folder groups a domain rather than a single table: `orders/` feeds both
 `bronze_order` and `bronze_order_status_changes`, and each load applies its own
@@ -59,6 +60,109 @@ nothing. Auto Loader finds no files and raises nothing, so an unloaded source
 looks exactly like a run with no new deliveries. That is why the layout is worth
 getting right before the first run rather than after.
 
+
+## First run
+
+The order matters, because four quality gates reference tables another flow
+builds. `silver_order`'s gate reads `silver_customer`, `bronze_product` and
+`bronze_currency`; `silver_invoice`'s and the status history's read
+`silver_order`; `silver_exchange_rate`'s and `silver_seller`'s read
+`bronze_currency`.
+
+**1.** Deploy. This creates the schemas and the volume, so it comes before the
+upload.
+
+```bash
+databricks bundle deploy -t dev
+```
+
+**2.** Upload the `data` folder into the volume, folders and all. The repo
+already holds the layout the flows expect, so this is a straight copy with
+nothing to rearrange.
+
+Three jobs start themselves on the upload: `load_bronze_product`,
+`load_bronze_customer` and `load_bronze_invoice`. The first two have everything
+they need. The third does not, and step 6 is where that is settled.
+
+**3.** Load the approved currencies. `build_silver_exchange_rate` then starts
+itself on a table update trigger, calls the NBP API and publishes
+`fact_exchange_rate`.
+
+```bash
+databricks bundle run load_bronze_currency -t dev
+```
+
+**4.** Load the sellers. This is the one Bronze load with a schedule rather
+than a trigger, because nothing pushes to a Delta folder, so the alternative is
+waiting for 02:00 UTC.
+
+```bash
+databricks bundle run load_bronze_seller -t dev
+```
+
+**5.** Load the orders, then the status history. The second needs
+`silver_order`, so it goes after the first rather than alongside it.
+
+`load_historical=true` is required on the first run and is **not** the default.
+It is what loads `orders.parquet`, the thirty-order backfill; without it a
+condition task skips that step and Bronze gets only the two replay deliveries,
+which carry sixteen rows for eight orders.
+
+```bash
+databricks bundle run load_order -t dev --params load_historical=true
+databricks bundle run load_order_status -t dev
+```
+
+Afterwards leave it alone. The default is `false`, so a routine run picks up the
+stream and schema-change deliveries and does not try to append the backfill a
+second time:
+
+```bash
+databricks bundle run load_order -t dev
+```
+
+The guard in the notebook means a repeated backfill would be skipped anyway —
+`orders.parquet` is not loaded twice because its name is already among the
+table's `source_file` values — but the parameter is what expresses the
+intention, and the condition task is what the flow asks for.
+
+**6.** Re-run the invoice job.
+
+```bash
+databricks bundle run load_bronze_invoice -t dev
+```
+
+It already ran at step 2, when the upload fired its trigger, and its Silver gate
+had no `silver_order` to check invoices against — so that run either failed or
+flagged every invoice. This one succeeds. It costs almost nothing: step 1 skips
+the PDFs already in Bronze, so the For Each runs no iterations and no AI
+function is called; only Silver and the fact are rebuilt.
+
+The alternative is to hold `invoices/` back at step 2 and upload it here
+instead, which avoids the wasted run. It also means splitting an upload in two
+and remembering why, so the re-run is the better trade for one run of a job.
+
+**7.** Nothing left to run. `build_gold_marts` starts itself five minutes after
+the last Gold table changes, builds the four marts, checks them, refreshes the
+dashboard and evaluates the two alerts. To start it without waiting:
+
+```bash
+databricks bundle run build_gold_marts -t dev
+```
+
+Three jobs have no trigger and are always started by hand:
+`load_bronze_currency`, `load_order` and `load_order_status`. Flow 01 asks for
+the first to be manual — "someone approves a currency change on purpose" — and
+flows 03 to 05 specify no trigger at all, so the order jobs read fixed files
+rather than a folder that keeps receiving deliveries.
+
+### Why the invoice job needs a second run
+
+Only `silver_order`'s gate fails loudly on a missing reference, through
+`require_references`. The others treat an empty reference as every row failing
+a foreign key, which is a warning — so the rows still land, with a quarantine
+entry each. That asymmetry is deliberate: it was added where an empty
+reference had already caused a silent wrong result.
 
 ## Getting started
 
@@ -77,6 +181,7 @@ If you're developing with an IDE, dependencies for this project should be instal
 *  Make sure you have the UV package manager installed.
    It's an alternative to tools like pip: https://docs.astral.sh/uv/getting-started/installation/.
 *  Run `uv sync --dev` to install the project's dependencies.
+
 
 
 # Using this project using the CLI

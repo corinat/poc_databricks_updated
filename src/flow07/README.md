@@ -154,6 +154,6 @@ Both alerts are **triggered** on this data:
 
 `no_orders_today` reports 0, because every order is dated January 2026 and `current_date()` has none. That is the requirement read literally — it is a freshness check, and the data genuinely is stale — so the alert is red by design until a delivery arrives with a current date.
 
-`quarantine_spike` reports two rows per Silver rebuild, from [orders_stream_bad_data.parquet](../../data/data/orders/orders_stream_bad_data.parquet), which exists so that a run produces the quarantine example EXERCISE deliverable 6 asks for. Both its rows break an error rule, so neither reaches Silver and none of the figures above is affected.
+`quarantine_spike` reports two rows per Silver rebuild, from [orders_stream_bad_data.parquet](../../data/orders/orders_stream_bad_data.parquet), which exists so that a run produces the quarantine example EXERCISE deliverable 6 asks for. Both its rows break an error rule, so neither reaches Silver and none of the figures above is affected.
 
 A triggered alert does not fail its task. The documented behaviour is "Succeeded: the alert was evaluated successfully, regardless of whether the alert condition was triggered or not", and `Failed` means the evaluation itself broke — a warehouse that would not start, or a query error. So the expected outcome of a healthy run is a green job with two red alerts, and the alert state is read in the alerts console, not from the job.
