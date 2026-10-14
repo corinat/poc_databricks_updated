@@ -33,15 +33,33 @@ flowchart LR
     DQ2 -->|flagged| Q
 ```
 
-## The three deliveries
+## The deliveries
 
 | File | Rows | Orders | `sales_channel` |
 |---|---|---|---|
 | `orders.parquet` | 30 | `O-0001`–`O-0030` | no |
 | `orders_stream.parquet` | 8 | `O-0023`–`O-0030` | no |
 | `orders_schema_change.parquet` | 8 | `O-0001`–`O-0008` | yes — 3 `web`, 5 `mobile` |
+| `orders_stream_bad_data.parquet` | 2 | `O-9001`–`O-9002` | no |
 
-So `bronze_order` holds 46 rows for 30 orders: the second and third files replay rows the first already delivered, and only `sales_channel` is new. Silver resolves that.
+So `bronze_order` holds 48 rows: the second and third files replay rows the first already delivered, and only `sales_channel` is new. Silver resolves that.
+
+### The fourth file is deliberately invalid
+
+`orders_stream_bad_data.parquet` exists so that a run of this project produces a real quarantine row, which EXERCISE deliverable 6 asks for. Without it the quarantine stays empty, because every row in the other three files passes all 46 rules.
+
+Its name is load-bearing: step 2's Auto Loader filters on `orders_stream*.parquet`, so the file is picked up by the existing stream with no code of its own, and the checkpoint loads it exactly once. Its schema is identical to `orders_stream.parquet` — the same nine columns, the same types, `currency` and `order_amount` under their Bronze names — because Auto Loader runs with `schemaEvolutionMode: addNewColumns` and a stray column would evolve the table rather than be rejected.
+
+Each row breaks exactly one `error` rule and nothing else:
+
+| Order | Value | Rule |
+|---|---|---|
+| `O-9001` | `quantity = 0` | `quantity_is_not_positive` |
+| `O-9002` | `currency = XXX` | `currency_code_not_in_bronze_currency` |
+
+Everything else on both rows is valid, including a real `product_id` and `customer_id`, so no warning fires and each quarantine row names one reason rather than a list.
+
+Both are errors rather than one error and one warning, and that is the point: an `error` row never reaches Silver, so `silver_order` stays at 30 orders and every number in Gold, in the marts and on the dashboard is unchanged by this file. A `warn` row would have reached Silver and shifted all of them.
 
 ## Jobs
 
@@ -227,7 +245,7 @@ The feed contains `delivered`, which appears nowhere in `orders.parquet`, so `si
 ## Verify
 
 ```sql
--- Bronze, per delivery: 30/30/0, 8/8/0, 8/8/8
+-- Bronze, per delivery: 30/30/0, 8/8/0, 8/8/8, and 2/2/0 for the bad-data file
 SELECT source_file, count(*) AS row_count, count(DISTINCT order_id) AS order_count,
        count(sales_channel) AS sales_channel_set
 FROM <catalog>.<bronze_schema>.bronze_order GROUP BY source_file ORDER BY source_file;
@@ -249,7 +267,21 @@ WHERE order_id <= 'O-0008' ORDER BY order_id;
 
 Schema evolution is recorded on step 3's write: `DESCRIBE HISTORY` shows `CREATE TABLE AS SELECT` (30), `STREAMING UPDATE` (8), then `WRITE` with `canMergeSchema: true` (8). There is no separate `ADD COLUMNS` entry — `mergeSchema` evolves the schema as part of the append.
 
-All 30 orders pass every rule, so the quarantine is empty on clean data. The gate's behaviour is proved by [tests/test_quality_gate.py](../../tests/test_quality_gate.py) rather than by inserting rows into Bronze: it builds orders in memory, runs the real rule files over them, and asserts that an `error` row is kept out of Silver while a `warn`-only row reaches both. Reference frames are built in memory too, so no table is read and none is written.
+All 30 real orders pass every rule. The quarantine holds two rows per Silver rebuild, both from `orders_stream_bad_data.parquet`, and they are the deliverable's worked example:
+
+```sql
+SELECT severity, c.name AS failed_check, c.message, row_data
+FROM <catalog>.<silver_schema>.silver_dq_quarantine
+LATERAL VIEW explode(failed_checks) AS c
+WHERE source_table = 'bronze_order'
+ORDER BY row_data:order_id
+```
+
+Two rows, severity `error`, one failed check each, with the message naming the offending value — `Value 'XXX' in column 'currency_code' not found in reference column 'currency_code'`.
+
+Because they are errors, neither reaches Silver: `silver_order` has 30 orders, not 32.
+
+The `warn` half of the gate — a row that reaches Silver *and* the quarantine — is not demonstrated by a file, because such a row would change every downstream number. It is covered by [tests/test_quality_gate.py](../../tests/test_quality_gate.py), which builds orders in memory, runs the real rule files over them, and asserts that an `error` row is kept out of Silver while a `warn`-only row reaches both. Reference frames are built in memory too, so no table is read and none is written.
 
 ```bash
 # validates every rule file; needs no compute

@@ -26,7 +26,7 @@ catalog = dbutils.widgets.get("catalog")
 bronze_schema = dbutils.widgets.get("bronze_schema")
 volume_name = dbutils.widgets.get("volume_name")
 
-source_path = f"/Volumes/{catalog}/{bronze_schema}/{volume_name}/data/exchange_rates_historical.csv"
+source_path = f"/Volumes/{catalog}/{bronze_schema}/{volume_name}/data/currencies_exchanges/exchange_rates_historical.csv"
 view_name = f"`{catalog}`.`{bronze_schema}`.bronze_exchange_rate_hist"
 
 # ── Explicit schema, shared shape with bronze_exchange_rate_current (step 3) ──
