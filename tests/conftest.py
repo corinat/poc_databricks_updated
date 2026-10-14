@@ -1,21 +1,35 @@
-"""This file configures pytest, initializes Databricks Connect, and provides fixtures for Spark and loading test data."""
+"""Configures pytest, and provides fixtures for Spark and for loading test data.
 
-import os, sys, pathlib
+Databricks Connect is optional here. A test file that only needs a local Spark
+session, or none at all, runs in an environment without it:
+
+    uv run --no-project --with pyspark --with pytest pytest tests/<file>.py
+
+So the databricks imports are allowed to fail. What depends on them — the eager
+session in pytest_configure and the spark fixture below — then does nothing and
+skips respectively, and a test that brings its own session is unaffected.
+Importing this file must not be what decides whether the suite can run.
+"""
+
+import csv
+import json
+import os
+import pathlib
+import sys
 from contextlib import contextmanager
 
+import pytest
+from pyspark.sql import SparkSession
 
 try:
     from databricks.connect import DatabricksSession
     from databricks.sdk import WorkspaceClient
-    from pyspark.sql import SparkSession
-    import pytest
-    import json
-    import csv
-    import os
+
+    DATABRICKS_CONNECT_AVAILABLE = True
 except ImportError:
-    raise ImportError(
-        "Test dependencies not found.\n\nRun tests using 'uv run pytest'. See http://docs.astral.sh/uv to learn more about uv."
-    )
+    DatabricksSession = None
+    WorkspaceClient = None
+    DATABRICKS_CONNECT_AVAILABLE = False
 
 
 @pytest.fixture()
@@ -27,6 +41,9 @@ def spark() -> SparkSession:
             df = spark.createDataFrame([(1,)], ["x"])
             assert df.count() == 1
     """
+    if not DATABRICKS_CONNECT_AVAILABLE:
+        pytest.skip("databricks-connect is not installed in this environment")
+
     return DatabricksSession.builder.getOrCreate()
 
 
@@ -72,6 +89,9 @@ def _compute_is_configured() -> bool:
     or set a cluster_id, or export SPARK_REMOTE. Without any of those, the
     tests that need a session skip themselves and the rest run in seconds.
     """
+    if not DATABRICKS_CONNECT_AVAILABLE:
+        return False
+
     try:
         conf = WorkspaceClient().config
     except Exception:
