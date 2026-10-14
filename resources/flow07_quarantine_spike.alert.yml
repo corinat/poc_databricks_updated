@@ -1,0 +1,66 @@
+# resources/flow07_quarantine_spike.alert.yml
+# Flow 07 — Alert B: rows rejected today by the quality gates.
+#
+# Watches the one shared quarantine table every Bronze to Silver gate writes
+# to, across all eight of them. Like alert A its own schedule is paused: the
+# Gold job evaluates it after the dashboard refresh.
+#
+# The threshold is 0, so any row rejected today raises it. "Spike" suggests a
+# tolerance, but a tolerance has to be calibrated against a normal rate, and on
+# clean data the normal rate is zero — all 46 rules pass. A threshold above
+# zero would mean choosing in advance how many rejected rows are acceptable,
+# which is a decision about the data this project does not have grounds to
+# make.
+#
+# Two things to know about what this counts.
+#
+# silver_dq_quarantine is a journal, not a current-state table. Every Silver
+# rebuild re-evaluates every Bronze row, so a bad row that stays in Bronze is
+# counted again on each run and the count grows daily. Rows deliberately
+# inserted to demonstrate the gate have to be removed from Bronze, or this
+# alert fires every day from the first.
+#
+# A warn row is in the quarantine and in Silver both. So this alert can fire on
+# rows that were published — which is intended: a warning is a row worth
+# looking at, not a row worth dropping.
+
+resources:
+  alerts:
+    alert_quarantine_spike:
+      display_name: quarantine_spike
+      warehouse_id: ${var.warehouse_id}
+
+      # The API requires a schedule, and flow 07 requires the Gold job to be
+      # what evaluates this alert — "they should evaluate against the data that
+      # was just refreshed, not stale data". A paused schedule satisfies both:
+      # the field is set, and nothing evaluates the alert except the
+      # alert_quarantine_spike task in build_gold_marts.
+      #
+      # The cron expression is what the cadence would be if someone unpaused
+      # it, not a cadence that runs. Leaving it unpaused would mean the alert
+      # also fired against whatever happened to be in the table at 06:00,
+      # which is the stale evaluation the requirement rules out.
+      schedule:
+        quartz_cron_schedule: "0 0 6 * * ?"
+        timezone_id: UTC
+        pause_status: PAUSED
+
+      query_text: |
+        SELECT count(*) AS quarantined_rows
+        FROM ${var.catalog}.${resources.schemas.silver.name}.silver_dq_quarantine
+        WHERE quarantined_at >= current_date()
+
+      evaluation:
+        comparison_operator: GREATER_THAN
+        source:
+          name: quarantined_rows
+        threshold:
+          value:
+            double_value: 0
+
+      custom_summary: Rows rejected by a quality gate today
+      custom_description: |
+        One or more rows were written to silver_dq_quarantine today. Group the
+        table by source_table and by the names in failed_checks to see which
+        gate and which rule, and read row_data for the rejected row itself.
+        An error row never reached Silver; a warn row is in both.

@@ -55,6 +55,23 @@
     arguments:
       column: gross_amount
 
+# order_id, which FACT_INVOICE needs to join an invoice to its order and which
+# gold_datamart_order_sales_detail needs to carry any invoice column at all. An
+# invoice with no order id cannot reach the mart, which is the same reason the
+# amounts above are errors rather than warnings.
+#
+# The foreign key rule at the end of this file cannot stand in for this one:
+# foreign_key does not report a NULL, because a missing value is not a
+# violation of integrity. Without this rule an invoice whose order id failed to
+# extract passes the gate silently and shows up as an all-NULL column in the
+# mart instead of a quarantine row.
+- name: order_id_is_null
+  criticality: error
+  check:
+    function: is_not_null
+    arguments:
+      column: order_id
+
 # ── Uniqueness ──
 # One row per invoice_id. The dedupe runs first, so this cannot fire for a
 # non-null id; it documents the invariant and would catch a dedupe regression.

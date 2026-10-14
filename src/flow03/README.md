@@ -11,6 +11,7 @@ Requirements: [flows/flows/03_customers.md](../../flows/flows/03_customers.md), 
 | Bronze | `bronze_customer` | table | `data/customer_data/*.csv` | append + `mergeSchema` | `01_load_bronze_customer.py` |
 | Silver | `silver_customer` | table | `bronze_customer` | overwrite | `02_build_silver_customer.py` |
 | Silver | `silver_dq_quarantine` | table | rows the quality gate rejects | append | `02_build_silver_customer.py` |
+| Gold | `dim_customer` | table | `silver_customer` | full overwrite | `03_build_gold_dim_customer.py` |
 
 Bronze objects live in schema `bronze_raw` and Silver in `silver`, in the catalog chosen by the bundle target (`poc_dev`, `poc_test`, `poc`). In the `dev` target, development mode prefixes schema names with `dev_<user>_`.
 
@@ -44,9 +45,11 @@ Defined in [resources/flow03_customer_job.job.yml](../../resources/flow03_custom
 
 | Job | Tasks | Trigger |
 |---|---|---|
-| `load_bronze_customer` | `load_bronze_customer` → `build_silver_customer` | file arrival on `data/customer_data/` |
+| `load_bronze_customer` | `load_bronze_customer` → `build_silver_customer` → `build_gold_dim_customer` | file arrival on `data/customer_data/` |
 
 Both steps are tasks of one job: an upload is a single event, and Silver has to be rebuilt whenever Bronze changes. `build_silver_customer` depends on `load_bronze_customer`, so a batch that failed to load does not quietly disappear from Silver — the second task never runs.
+
+`build_gold_dim_customer` depends on Silver for the same reason, so the projection is never taken from a table a failed gate left half-written. `dim_customer` is watched by flow 06's mart job, so publishing it starts a mart rebuild five minutes later.
 
 Development mode normally pauses triggers. The job file sets `pause_status: UNPAUSED` explicitly so the trigger stays active in dev too.
 
@@ -84,6 +87,14 @@ The current data gives three levels — holding company, account, branch:
 | 201 | 0 | 201 | Northwind Holding |
 | 101 | 1 | 201 | Northwind Holding > Ava Stone |
 | 111 | 2 | 201 | Northwind Holding > Ava Stone > Ava Stone - Warsaw Branch |
+
+## Approach — Gold
+
+`dim_customer` is a projection: the five columns `DIM_CUSTOMER` declares, in its order, and nothing else. Full overwrite, after Silver, with no quality gate of its own — the project's rules put DQX at the Bronze to Silver boundary.
+
+The three hierarchy columns stop at Silver. `level`, `hierarchy_path` and `root_customer_id` are in `silver_customer` because flow 03 asks for the hierarchy to be flattened once, there; `DIM_CUSTOMER` does not declare them, and `parent_customer_id` is enough for the dimension to express the relationship.
+
+`customer_type` is declared and always NULL. Neither customer file has a source for it. It is declared rather than omitted because Gold is the published contract and DATA_MODEL.md is a deliverable: a table with four columns against a model that declares five means the diagram and the table disagree. NULL makes the gap visible in the data.
 
 ## Data quality
 

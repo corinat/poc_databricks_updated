@@ -1,0 +1,66 @@
+# resources/flow07_no_orders_today.alert.yml
+# Flow 07 — Alert A: no orders loaded today.
+#
+# A freshness and completeness check, not a business anomaly: it fires when the
+# day has no orders at all, which is what a load that silently did nothing
+# looks like.
+#
+# The alert's own schedule is paused. Flow 07 requires both alerts to be
+# evaluated as tasks of the Gold job, after the dashboard refresh, so they read
+# the data that was just published rather than whatever was there when a
+# schedule happened to fire. The API requires the field to be set, so it is set
+# and paused; the job task is what evaluates it, and this resource only defines
+# the query and the condition.
+#
+# coalesce is load-bearing. The summary has one row per date, currency and
+# category, and a date with nothing loaded has no row at all rather than a row
+# of zeros — so sum() over no rows returns NULL, and NULL is not EQUAL to 0.
+# Without the coalesce the alert would stay silent on exactly the day it exists
+# to catch.
+#
+# Known consequence on the current data: every order is dated January 2026, so
+# current_date() has no orders and this alert fires on every evaluation. That
+# is the requirement read literally — it is a freshness check, and the data
+# genuinely is nine months stale — but it means the alert is red by design
+# until a delivery arrives with a current date.
+
+resources:
+  alerts:
+    alert_no_orders_today:
+      display_name: no_orders_today
+      warehouse_id: ${var.warehouse_id}
+
+      # The API requires a schedule, and flow 07 requires the Gold job to be
+      # what evaluates this alert — "they should evaluate against the data that
+      # was just refreshed, not stale data". A paused schedule satisfies both:
+      # the field is set, and nothing evaluates the alert except the
+      # alert_no_orders_today task in build_gold_marts.
+      #
+      # The cron expression is what the cadence would be if someone unpaused
+      # it, not a cadence that runs. Leaving it unpaused would mean the alert
+      # also fired against whatever happened to be in the table at 06:00,
+      # which is the stale evaluation the requirement rules out.
+      schedule:
+        quartz_cron_schedule: "0 0 6 * * ?"
+        timezone_id: UTC
+        pause_status: PAUSED
+
+      query_text: |
+        SELECT coalesce(sum(order_count), 0) AS order_count
+        FROM ${var.catalog}.${resources.schemas.gold.name}.gold_datamart_daily_sales_summary
+        WHERE sales_date = current_date()
+
+      evaluation:
+        comparison_operator: EQUAL
+        source:
+          name: order_count
+        threshold:
+          value:
+            double_value: 0
+
+      custom_summary: No orders loaded for today
+      custom_description: |
+        gold_datamart_daily_sales_summary has no orders under today's date.
+        Either no delivery arrived, or a load reported success having read
+        nothing. Check the flow jobs' most recent runs before reading the
+        dashboard, whose numbers are then as stale as the data.

@@ -13,6 +13,9 @@ Requirements: [flows/flows/01_currency_exchange_rate.md](../../flows/flows/01_cu
 | Bronze | `bronze_exchange_rate_current` | table | NBP API | full overwrite | `03_load_bronze_exchange_rate_current.py` |
 | Silver | `silver_exchange_rate` | table | the two exchange-rate Bronze objects | replace the incoming dates | `04_build_silver_exchange_rate.py` |
 | Silver | `silver_dq_quarantine` | table | rows the quality gate rejects | append | `04_build_silver_exchange_rate.py` |
+| Silver | `silver_currency` | table | `bronze_currency` | overwrite | `05_build_silver_currency.py` |
+| Gold | `dim_currency` | table | `silver_currency` | full overwrite | `06_build_gold_dim_currency.py` |
+| Gold | `fact_exchange_rate` | table | `silver_exchange_rate` | full overwrite | `07_build_gold_fact_exchange_rate.py` |
 
 All objects live in the catalog chosen by the bundle target (`poc_dev`, `poc_test`, `poc`). Bronze objects are in schema `bronze_raw`, Silver in `silver`. In the `dev` target, development mode prefixes schema names with `dev_<user>_`.
 
@@ -34,10 +37,14 @@ Defined in [resources/flow01_currency_job.job.yml](../../resources/flow01_curren
 
 | Job | Runs | Trigger |
 |---|---|---|
-| `load_bronze_currency` | step 1 | manual — someone approves a currency change |
-| `build_silver_exchange_rate` | steps 2–4 | table update on `bronze_currency` |
+| `load_bronze_currency` | steps 1, 5 and 6 | manual — someone approves a currency change |
+| `build_silver_exchange_rate` | steps 2–4 and 7 | table update on `bronze_currency` |
 
-Inside `build_silver_exchange_rate`, steps 2 and 3 run in parallel (step 3 only needs `bronze_currency`, not the view). Step 4 waits for both.
+The split follows what each step reads. `silver_currency` and `dim_currency` need only `bronze_currency`, so they are tasks of the job that writes it; the rates need both Bronze sources, so they are tasks of the job the first one triggers.
+
+Inside `build_silver_exchange_rate`, steps 2 and 3 run in parallel — step 3 only needs `bronze_currency`, not the view — and step 4 waits for both. Each Gold build waits for its own Silver source, so a projection is never taken from a table a failed gate left half-written.
+
+Both Gold tables are watched by flow 06's mart job, so publishing either starts a mart rebuild five minutes later.
 
 The catalog, schema and volume names are job-level parameters, filled in by the bundle, and read by every notebook through widgets.
 
@@ -75,6 +82,31 @@ The catalog, schema and volume names are job-level parameters, filled in by the 
 - The schema is declared with `CREATE TABLE IF NOT EXISTS`, so the shape is pinned for Gold rather than taken from whatever the query produced. `` `table` `` needs backticks there, being a reserved word. `code` and `effectiveDate` are `NOT NULL` — they are the pair the write replaces on and the pair uniqueness is defined over.
 - The rows then go through the quality gate; see [Data quality](#data-quality).
 - The rows that pass are written with `.option("replaceUsing", "effectiveDate")`, which deletes the Silver rows whose `effectiveDate` matches an incoming row and inserts the incoming ones. Dates absent from the source keep their existing rows.
+
+## Approach — Gold
+
+Both Gold tables are published by Job B, after Silver, so a projection is never taken from a Silver table a failed quality gate left half-written. Neither has a quality gate of its own: the project's rules put DQX at the Bronze to Silver boundary, so a row reaching Gold has already passed one.
+
+### `dim_currency`
+
+A projection — the four columns `DIM_CURRENCY` declares, in its order, and nothing else. `source_file` and `ingested_at` stop at Silver; they are lineage for that layer, not attributes of a currency. Every column has a source, so unlike `dim_product` and `dim_customer` there is no NULL placeholder here.
+
+### `fact_exchange_rate`
+
+The one Gold build in the project that renames. Silver keeps the NBP API's own column names, because the quality requirement writes them that way — "unique (`effectiveDate`, `code`), positive `mid`" — so the rename to the data model happens here:
+
+| Silver | Gold |
+|---|---|
+| `effectiveDate` | `rate_date` |
+| `code` | `currency_code` |
+| `mid` | `rate_to_pln` |
+| `table` | `table_type` |
+
+`table_type` is always `A`. Both sources are NBP table A by design: the API path is fixed to `/rates/A/` and the historical CSV carries `A` on every row. Table A holds the mid rates, which is what matches the historical file and what a single `rate_to_pln` needs — table C would publish a buy and a sell rate and leave the choice open. The column is in the model to tell the tables apart if B or C were ever added.
+
+`rate_source` is carried through from Silver rather than worked out here. `silver_exchange_rate` sets it where the two Bronze sources are combined, which is the one place the distinction cannot be mistaken; deriving it here by matching `source_file` against the API host would reconstruct something already known, and would label every rate as coming from the CSV if the two ever disagreed about the host.
+
+Two columns stop at Silver: `currency` is the currency's name, which belongs to `DIM_CURRENCY` as `currency_name` rather than to a fact, and `no` is the NBP bulletin number, which the model does not declare.
 
 ## Data quality
 

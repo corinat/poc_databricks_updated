@@ -38,6 +38,13 @@
 # seller_id is not in the invoices. The PDFs carry the seller's name, address
 # and tax id, so the id has to be resolved against dim_seller on tax_id, which
 # is a business join and belongs in Gold.
+#
+# Two readings of one document. order_id and invoice_status are printed on a
+# line the invoices then cover with a white rectangle, so the page the
+# extraction reads does not show them; step 2 reads the same bytes' text layer
+# into order_id_text_layer and invoice_status_text_layer, and this notebook
+# coalesces each pair with the extraction first. Every other column comes from
+# the extraction alone.
 
 # COMMAND ----------
 import sys
@@ -87,12 +94,6 @@ SILVER_COLUMNS = [
     "seller_city",
     "currency_code", "net_amount", "vat_amount", "gross_amount",
     "pdf_path", "ingested_at",
-]
-
-# Fields an invoice is unusable without: the key, the date it is reported
-# under, and the three money columns.
-REQUIRED_COLUMNS = [
-    "invoice_id", "invoice_date", "net_amount", "vat_amount", "gross_amount",
 ]
 
 # COMMAND ----------
@@ -159,9 +160,19 @@ flattened_cte = f"""
 WITH flattened AS (
     SELECT
         CAST({extracted('invoice_id')}         AS STRING) AS invoice_id,
-        CAST({extracted('order_id')}           AS STRING) AS order_id,
+        -- Extraction first, text layer second. The invoices paint a white
+        -- rectangle over the line carrying these two fields, so the page the
+        -- extraction reads does not show them; step 2 reads the same bytes'
+        -- text layer into the two _text_layer columns. Extraction stays first
+        -- so an invoice that does print the line visibly is read from the
+        -- page, and this coalesce becomes a no-op without being removed.
+        coalesce(
+            CAST({extracted('order_id')} AS STRING), order_id_text_layer
+        )                                                  AS order_id,
         try_cast({extracted('invoice_date')}   AS DATE)   AS invoice_date,
-        CAST({extracted('invoice_status')}     AS STRING) AS invoice_status,
+        coalesce(
+            CAST({extracted('invoice_status')} AS STRING), invoice_status_text_layer
+        )                                                  AS invoice_status,
         CAST({extracted('place_of_issue')}     AS STRING) AS place_of_issue,
 
         CAST({extracted('buyer:name')}         AS STRING) AS buyer_name,

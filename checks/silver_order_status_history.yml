@@ -70,3 +70,26 @@
       ref_columns:
         - order_id
       ref_df_name: silver_order
+
+# ── Uniqueness ──
+# One event per order per position in its sequence. sequence_num is what
+# AUTO CDC orders the history by, so two rows sharing an order_id and a
+# sequence_num make the ordering ambiguous: which of them the SCD Type 2
+# interval closes on would depend on the order the rows happened to arrive in.
+#
+# error, so an ambiguous pair goes to the quarantine instead of into the
+# history. The other gates mark uniqueness as an error for the same reason.
+#
+# Scope to know: this feed is read as a stream, and DQX validates uniqueness
+# within individual micro-batches only. A duplicate pair arriving in one batch
+# is caught; the same pair split across two batches is not. Nothing stronger is
+# available without keeping state across the stream, and the check is still
+# worth having — a redelivered file arrives as one batch.
+- name: order_id_sequence_num_is_not_unique
+  criticality: error
+  check:
+    function: is_unique
+    arguments:
+      columns:
+        - order_id
+        - sequence_num

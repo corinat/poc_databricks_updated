@@ -1,0 +1,495 @@
+{
+  "datasets": [
+    {
+      "name": "daily_sales_summary",
+      "displayName": "Daily Sales Summary",
+      "config": {
+        "source": "gold_datamart_daily_sales_summary",
+        "measures": [
+          {
+            "name": "sales_pln",
+            "expr": "SUM(sales_pln)",
+            "format": {
+              "type": "currency",
+              "currencyCode": "PLN",
+              "decimalPlaces": {
+                "type": "exact",
+                "places": 2.0
+              }
+            }
+          },
+          {
+            "name": "order_count",
+            "expr": "SUM(order_count)"
+          },
+          {
+            "name": "item_quantity",
+            "expr": "SUM(item_quantity)"
+          }
+        ],
+        "version": "1.1",
+        "comment": "Daily sales summary by date, currency, and product category. Cancelled orders excluded. sales_pln is the only cross-currency comparable measure.",
+        "dimensions": [
+          {
+            "name": "sales_date",
+            "expr": "sales_date"
+          },
+          {
+            "name": "currency_code",
+            "expr": "currency_code"
+          },
+          {
+            "name": "product_category",
+            "expr": "product_category"
+          }
+        ]
+      }
+    },
+    {
+      "name": "order_sales_detail",
+      "displayName": "Order Sales Detail",
+      "config": {
+        "source": "gold_datamart_order_sales_detail",
+        "measures": [
+          {
+            "name": "order_count",
+            "expr": "COUNT(*)"
+          },
+          {
+            "name": "order_amount_pln",
+            "expr": "SUM(order_amount_pln)",
+            "format": {
+              "type": "currency",
+              "currencyCode": "PLN",
+              "decimalPlaces": {
+                "type": "exact",
+                "places": 2.0
+              }
+            }
+          }
+        ],
+        "version": "1.1",
+        "comment": "Order-level sales detail. Includes cancelled orders. order_amount_pln is the cross-currency converted measure.",
+        "dimensions": [
+          {
+            "name": "order_status",
+            "expr": "order_status"
+          },
+          {
+            "name": "order_date",
+            "expr": "order_date"
+          },
+          {
+            "name": "currency_code",
+            "expr": "currency_code"
+          }
+        ]
+      }
+    }
+  ],
+  "pages": [
+    {
+      "name": "3e679d6c",
+      "displayName": "Untitled page",
+      "layout": [
+        {
+          "widget": {
+            "name": "sales_by_date_line",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "daily_sales_summary",
+                  "fields": [
+                    {
+                      "name": "sales_date",
+                      "expression": "`sales_date`"
+                    },
+                    {
+                      "name": "measure(sales_pln)",
+                      "expression": "MEASURE(`sales_pln`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "frame": {
+                "showTitle": true,
+                "title": "Total Sales (PLN) by Date"
+              },
+              "version": 3,
+              "widgetType": "line",
+              "encodings": {
+                "x": {
+                  "fieldName": "sales_date",
+                  "displayName": "sales_date",
+                  "scale": {
+                    "type": "temporal"
+                  }
+                },
+                "y": {
+                  "fieldName": "measure(sales_pln)",
+                  "displayName": "sales_pln",
+                  "scale": {
+                    "type": "quantitative"
+                  }
+                }
+              },
+              "data": {
+                "queryName": "main_query"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 0,
+            "width": 12,
+            "height": 6
+          }
+        },
+        {
+          "widget": {
+            "name": "sales_by_currency_bar",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "daily_sales_summary",
+                  "fields": [
+                    {
+                      "name": "currency_code",
+                      "expression": "`currency_code`"
+                    },
+                    {
+                      "name": "measure(sales_pln)",
+                      "expression": "MEASURE(`sales_pln`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "frame": {
+                "showTitle": true,
+                "title": "Total Sales (PLN) by Currency"
+              },
+              "version": 3,
+              "widgetType": "bar",
+              "encodings": {
+                "x": {
+                  "fieldName": "currency_code",
+                  "displayName": "currency_code",
+                  "scale": {
+                    "type": "categorical",
+                    "sort": {
+                      "by": "y-reversed"
+                    }
+                  }
+                },
+                "y": {
+                  "fieldName": "measure(sales_pln)",
+                  "displayName": "sales_pln",
+                  "scale": {
+                    "type": "quantitative"
+                  }
+                },
+                "color": {
+                  "fieldName": "currency_code",
+                  "displayName": "currency_code",
+                  "scale": {
+                    "type": "categorical"
+                  }
+                }
+              },
+              "data": {
+                "queryName": "main_query"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 6,
+            "width": 6,
+            "height": 6
+          }
+        },
+        {
+          "widget": {
+            "name": "sales_by_category_bar",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "daily_sales_summary",
+                  "fields": [
+                    {
+                      "name": "product_category",
+                      "expression": "`product_category`"
+                    },
+                    {
+                      "name": "measure(sales_pln)",
+                      "expression": "MEASURE(`sales_pln`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "frame": {
+                "showTitle": true,
+                "title": "Total Sales (PLN) by Product Category"
+              },
+              "version": 3,
+              "widgetType": "bar",
+              "encodings": {
+                "x": {
+                  "fieldName": "product_category",
+                  "displayName": "product_category",
+                  "scale": {
+                    "type": "categorical",
+                    "sort": {
+                      "by": "y-reversed"
+                    }
+                  }
+                },
+                "y": {
+                  "fieldName": "measure(sales_pln)",
+                  "displayName": "sales_pln",
+                  "scale": {
+                    "type": "quantitative"
+                  }
+                },
+                "color": {
+                  "fieldName": "product_category",
+                  "displayName": "product_category",
+                  "scale": {
+                    "type": "categorical"
+                  }
+                }
+              },
+              "data": {
+                "queryName": "main_query"
+              }
+            }
+          },
+          "position": {
+            "x": 6,
+            "y": 6,
+            "width": 6,
+            "height": 6
+          }
+        },
+        {
+          "widget": {
+            "name": "orders_by_status_bar",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "order_sales_detail",
+                  "fields": [
+                    {
+                      "name": "order_status",
+                      "expression": "`order_status`"
+                    },
+                    {
+                      "name": "measure(order_count)",
+                      "expression": "MEASURE(`order_count`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "frame": {
+                "showTitle": true,
+                "title": "Number of Orders by Status"
+              },
+              "version": 3,
+              "widgetType": "bar",
+              "encodings": {
+                "x": {
+                  "fieldName": "order_status",
+                  "displayName": "order_status",
+                  "scale": {
+                    "type": "categorical"
+                  }
+                },
+                "y": {
+                  "fieldName": "measure(order_count)",
+                  "displayName": "order_count",
+                  "scale": {
+                    "type": "quantitative"
+                  }
+                },
+                "color": {
+                  "fieldName": "order_status",
+                  "displayName": "order_status",
+                  "scale": {
+                    "type": "categorical"
+                  }
+                }
+              },
+              "data": {
+                "queryName": "main_query"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 12,
+            "width": 12,
+            "height": 6
+          }
+        },
+        {
+          "widget": {
+            "name": "date_range_filter",
+            "queries": [
+              {
+                "name": "dashboards/01f1c7977d7a16fe88fe2dbfb634e49b/datasets/01f1c79823cc1feaa0d46a9b18983238_sales_date",
+                "query": {
+                  "datasetName": "daily_sales_summary",
+                  "fields": [
+                    {
+                      "name": "sales_date",
+                      "expression": "`sales_date`"
+                    },
+                    {
+                      "name": "sales_date_associativity",
+                      "expression": "COUNT_IF(`associative_filter_predicate_group`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              },
+              {
+                "name": "dashboards/01f1c7977d7a16fe88fe2dbfb634e49b/datasets/01f1c79826bc1e0c870fd23c292dfa3d_order_date",
+                "query": {
+                  "datasetName": "order_sales_detail",
+                  "fields": [
+                    {
+                      "name": "order_date",
+                      "expression": "`order_date`"
+                    },
+                    {
+                      "name": "order_date_associativity",
+                      "expression": "COUNT_IF(`associative_filter_predicate_group`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "frame": {
+                "showTitle": true,
+                "title": "Date Range"
+              },
+              "widgetType": "filter-date-range-picker",
+              "encodings": {
+                "fields": [
+                  {
+                    "fieldName": "sales_date",
+                    "queryName": "dashboards/01f1c7977d7a16fe88fe2dbfb634e49b/datasets/01f1c79823cc1feaa0d46a9b18983238_sales_date"
+                  },
+                  {
+                    "fieldName": "order_date",
+                    "queryName": "dashboards/01f1c7977d7a16fe88fe2dbfb634e49b/datasets/01f1c79826bc1e0c870fd23c292dfa3d_order_date"
+                  }
+                ]
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 18,
+            "width": 6,
+            "height": 3
+          }
+        },
+        {
+          "widget": {
+            "name": "currency_filter",
+            "queries": [
+              {
+                "name": "dashboards/01f1c7977d7a16fe88fe2dbfb634e49b/datasets/01f1c79823cc1feaa0d46a9b18983238_currency_code",
+                "query": {
+                  "datasetName": "daily_sales_summary",
+                  "fields": [
+                    {
+                      "name": "currency_code",
+                      "expression": "`currency_code`"
+                    },
+                    {
+                      "name": "currency_code_associativity",
+                      "expression": "COUNT_IF(`associative_filter_predicate_group`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              },
+              {
+                "name": "dashboards/01f1c7977d7a16fe88fe2dbfb634e49b/datasets/01f1c79826bc1e0c870fd23c292dfa3d_currency_code",
+                "query": {
+                  "datasetName": "order_sales_detail",
+                  "fields": [
+                    {
+                      "name": "currency_code",
+                      "expression": "`currency_code`"
+                    },
+                    {
+                      "name": "currency_code_associativity",
+                      "expression": "COUNT_IF(`associative_filter_predicate_group`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "frame": {
+                "showTitle": true,
+                "title": "Currency"
+              },
+              "widgetType": "filter-single-select",
+              "encodings": {
+                "fields": [
+                  {
+                    "fieldName": "currency_code",
+                    "queryName": "dashboards/01f1c7977d7a16fe88fe2dbfb634e49b/datasets/01f1c79823cc1feaa0d46a9b18983238_currency_code"
+                  },
+                  {
+                    "fieldName": "currency_code",
+                    "queryName": "dashboards/01f1c7977d7a16fe88fe2dbfb634e49b/datasets/01f1c79826bc1e0c870fd23c292dfa3d_currency_code"
+                  }
+                ]
+              }
+            }
+          },
+          "position": {
+            "x": 6,
+            "y": 18,
+            "width": 6,
+            "height": 3
+          }
+        }
+      ],
+      "pageType": "PAGE_TYPE_CANVAS",
+      "layoutVersion": "GRID_V1"
+    }
+  ],
+  "uiSettings": {
+    "theme": {
+      "widgetHeaderAlignment": "ALIGNMENT_UNSPECIFIED"
+    },
+    "applyModeEnabled": false
+  }
+}

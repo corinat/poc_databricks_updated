@@ -8,7 +8,7 @@
 # active in every target.
 #
 # Task graph: list the PDFs still to parse, then a For Each that runs the parse
-# notebook once per file. Silver is not built yet.
+# notebook once per file, Silver, and the Gold fact.
 
 resources:
   jobs:

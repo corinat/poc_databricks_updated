@@ -15,6 +15,7 @@ Requirements: [flows/flows/05_orders.md](../../flows/flows/05_orders.md), plus t
 | Silver | `silver_dq_quarantine` | flagged rows | append | `04_build_silver_order.py` |
 | Bronze | `bronze_order_status_changes` | `order_status_changes*.parquet` | append, Auto Loader | `05_load_bronze_order_status_changes.py` |
 | Silver | `silver_order_status_history` | `bronze_order_status_changes` | `AUTO CDC`, SCD 2 | `06_silver_order_status_history.py` |
+| Gold | `fact_order` | `silver_order` | full overwrite | `07_build_gold_fact_order.py` |
 
 Bronze in schema `bronze_raw`, Silver in `silver`, catalog per bundle target. Dev mode prefixes schemas with `dev_<user>_`.
 
@@ -52,7 +53,9 @@ Three resource files, one resource each, which is the convention `databricks bun
 | [flow05_order_status_job.job.yml](../../resources/flow05_order_status_job.job.yml) | the `load_order_status` job |
 | [flow05_order_status_pipeline.pipeline.yml](../../resources/flow05_order_status_pipeline.pipeline.yml) | the `order_status_history` pipeline |
 
-Notebook tasks on serverless environment 6, plus the pipeline for `AUTO CDC`, which is pipeline-only. No triggers — these are fixed files, not a folder receiving deliveries.
+Notebook tasks on serverless environment 6, plus the pipeline for `AUTO CDC`, which is pipeline-only. No triggers — these are fixed files, not a folder receiving deliveries, and flow 05 specifies none.
+
+`build_gold_fact_order` is the last task of `load_order`, after Silver. `fact_order` is watched by flow 06's mart job, so publishing it starts a mart rebuild five minutes later.
 
 ```mermaid
 flowchart LR
@@ -142,6 +145,16 @@ Three clauses, not two. `whenMatchedUpdateAll` and `whenNotMatchedInsertAll` onl
 That means Silver mirrors the gate, so an empty valid set empties the table — the same exposure every gate written with a full overwrite already has, with `RESTORE TABLE ... TO VERSION AS OF` as the way back.
 
 One path to an empty valid set is guarded rather than left to time travel. `require_references` in [src/common/dq.py](../common/dq.py) fails the task if a reference frame is empty, naming the table. A `foreign_key` check cannot tell "this value is wrong" from "the reference was never loaded" — it only reports "not found" — so an empty `bronze_currency` would fail the currency rule for every order, and since that rule is an `error` and this write can delete, `silver_order` would be emptied by a run that looked successful. It is the one gate where that combination exists; everywhere else the foreign keys are warnings, so an empty reference flags every row but costs no data.
+
+## Gold
+
+`fact_order` is a projection: the nine columns `FACT_ORDER` declares, in its order, and nothing else. Published by the `load_order` job after Silver, with no quality gate of its own — the project's rules put DQX at the Bronze to Silver boundary.
+
+Full overwrite rather than a merge. The fact is the whole of its source, and because `silver_order`'s merge now deletes rows the gate stops passing, an overwrite here keeps the two in step: a row that left Silver leaves Gold in the same run.
+
+Three columns stop at Silver. `sales_channel` is the column the schema-change delivery added, and `FACT_ORDER` does not declare it; `source_file` and `ingested_at` are Bronze lineage carried into Silver so the dedupe's choice stays traceable, and they are not attributes of an order.
+
+`silver_order_status_history` has no Gold table. DATA_MODEL lists it outside the ER diagram, and the status an order is in now is already on `fact_order`; the history is a separate feed that disagrees with the order files on ten of the twelve orders they share, so nothing in the star schema is derived from it.
 
 ## Data quality
 
