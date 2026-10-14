@@ -59,16 +59,13 @@ def load_fixture(spark: SparkSession):
 def _compute_is_configured() -> bool:
     """Whether this environment already names compute for Databricks Connect.
 
-    Changed from the default-python template, which instead set
-    DATABRICKS_SERVERLESS_COMPUTE_ID to "auto" whenever nothing was configured
-    and then opened a session eagerly in pytest_configure. That made every
-    pytest invocation start a serverless session before collecting a single
-    test — including tests that touch no Spark at all — so a plain `uv run
-    pytest` blocked for minutes on a machine with no compute, and `--noconftest`
-    was the only way to run the rule-file test.
+    Compute is never enabled implicitly. Enabling it here would mean every
+    pytest invocation starting a serverless session before collecting a single
+    test, including the tests that touch no Spark at all, so a plain
+    `uv run pytest` would block for minutes on a machine with no compute.
 
-    Compute is now never enabled implicitly. To run the tests that need Spark,
-    name it in your Databricks profile, for example
+    To run the tests that need Spark, name it in your Databricks profile, for
+    example
 
         serverless_compute_id = auto
 

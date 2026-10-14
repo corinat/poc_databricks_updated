@@ -168,7 +168,7 @@ One path to an empty valid set is guarded rather than left to time travel. `requ
 
 `fact_order` is a projection: the nine columns `FACT_ORDER` declares, in its order, and nothing else. Published by the `load_order` job after Silver, with no quality gate of its own — the project's rules put DQX at the Bronze to Silver boundary.
 
-Full overwrite rather than a merge. The fact is the whole of its source, and because `silver_order`'s merge now deletes rows the gate stops passing, an overwrite here keeps the two in step: a row that left Silver leaves Gold in the same run.
+Full overwrite rather than a merge. The fact is the whole of its source, and because `silver_order`'s merge deletes any row the gate stops passing, an overwrite here keeps the two in step: a row that leaves Silver leaves Gold in the same run.
 
 Three columns stop at Silver. `sales_channel` is the column the schema-change delivery added, and `FACT_ORDER` does not declare it; `source_file` and `ingested_at` are Bronze lineage carried into Silver so the dedupe's choice stays traceable, and they are not attributes of an order.
 

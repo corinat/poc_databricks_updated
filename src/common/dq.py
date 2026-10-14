@@ -66,11 +66,10 @@ def require_references(ref_dfs: dict) -> None:
     error and the write can delete, the result is an emptied Silver table from a
     run that looks successful.
 
-    This turns that into a failure that names the table instead. It guards a
-    failure mode that has happened, not a hypothetical one: a Bronze reference
-    table stayed empty because its source file was in the wrong folder, and the
-    load reported success because an Auto Loader stream with no new files is
-    not an error.
+    This turns that into a failure that names the table instead. The way a
+    reference goes quietly empty is a load that read nothing: an Auto Loader
+    stream finding no files in its folder is not an error, so the task reports
+    success and the table it was meant to fill stays as it was.
 
     Worth calling only from a gate whose foreign keys are errors. Where they
     are warnings an empty reference flags every row but costs no data, so the

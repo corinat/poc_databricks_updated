@@ -3,11 +3,10 @@
 # Loaded by src/flow04/03_build_silver_invoice.py, which gets this file's path
 # as the checks_path job parameter.
 #
-# These replace a hand-written check that raised RuntimeError when any required
-# field was missing, leaving silver_invoice untouched. The gate keeps the same
-# invoices out of Silver — an error row never reaches it — but publishes the
-# ones that are fine instead of blocking all of them, and records why each was
-# rejected rather than only naming it in a failed task.
+# An error row never reaches Silver, and the invoices that are fine are
+# published rather than held back with it. The reason is recorded per row in
+# the quarantine, so a rejected invoice is identifiable without reading a
+# task's log.
 #
 # The fields are extracted by an LLM, so any of them can come back missing.
 # That is what makes completeness the heart of this gate rather than a
