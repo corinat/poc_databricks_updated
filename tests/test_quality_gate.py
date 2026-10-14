@@ -11,15 +11,51 @@ rather than tables, so no table is read and none is written. That is the point:
 proving the gate works should not mean inserting rows into bronze_order and
 remembering to delete them.
 
-None of them needs Databricks compute in principle. The spark fixture below
-prefers a local session, falls back to Databricks Connect, and skips the test if
-it can have neither; DQEngine is given a mock workspace client because the
-checks never call the workspace. So with OSS pyspark and a JDK installed, the
-whole file runs offline:
+Running these is optional. No requirement asks for tests, and nothing in the
+deliverables depends on them. test_checks_files_are_valid is the one worth
+having in CI — it puts all 46 rule definitions through DQX's own validator, so a
+misspelled check function or a missing argument fails there rather than at the
+next deploy, and it needs no Java, no compute and no pandas. The other two are a
+developer convenience: they exercise the gate's behaviour, and they need a Spark
+session.
 
+The spark fixture below prefers a local session, falls back to Databricks
+Connect, and skips the test if it can have neither; DQEngine is given a mock
+workspace client because the checks never call the workspace. So with OSS
+pyspark and a JDK installed, the whole file runs offline. On macOS, verified:
+
+    JAVA_HOME=/Library/Java/JavaVirtualMachines/temurin-17.jdk/Contents/Home \
     uv run --no-project --with pyspark --with databricks-labs-dqx==0.16.0 \
-        --with pytest --with pyyaml \
+        --with pytest --with pyyaml --with "pandas<3" \
         pytest tests/test_quality_gate.py -v
+
+All three pass that way, in about a minute and a half, with no workspace and no
+compute. Four things that command is particular about:
+
+  JDK 17 or 21. Spark 4 does not run on a newer one: JDK 26 fails at startup
+  with ClassNotFoundException on jdk.internal.ref.Cleaner, a class those JDKs
+  no longer have.
+
+  pandas, pinned below 3. DQX imports it in check_funcs without declaring it,
+  and PySpark warns that it does not yet fully support pandas 3.
+
+  No virtual environment active. `databricks` is a namespace package, so a
+  VIRTUAL_ENV pointing at an environment that has databricks-connect leaves it
+  on sys.path even under --no-project, where it collides with the pyspark
+  installed alongside it.
+
+  The dqx version pinned to the one databricks.yml installs on the jobs, so the
+  rules are checked against the engine that will run them.
+
+On Windows the same packages and the same JDK constraint apply, but the
+invocation differs and may need more. JAVA_HOME is set by the shell rather than
+inline — `$env:JAVA_HOME = "..."` in PowerShell, `set JAVA_HOME=...` in cmd —
+and the path is wherever the JDK installed, not the macOS one above. Local Spark
+on Windows may additionally want HADOOP_HOME and winutils.exe, which is a
+Spark-on-Windows requirement rather than anything this project controls. None of
+that was tested here. Anyone who would rather not find out can name compute in
+the Databricks profile and let the two Spark tests run there instead, or leave
+them skipped — the rule-file test runs on any platform regardless.
 
 In the project's own environment databricks-connect replaces pyspark and refuses
 local sessions, so the second and third tests need compute named in the
@@ -195,11 +231,20 @@ def test_gate_splits_rows(gate_result):
     assert "O-0005" in in_quarantine
 
 
+def _payload(row):
+    """The quarantined row's VARIANT payload, as a dict.
+
+    collect() returns a VARIANT column as a VariantVal, which is not a mapping;
+    toPython() is what turns it into one.
+    """
+    return row.row_data.toPython()
+
+
 def test_quarantine_projection(gate_result):
     """The quarantine payload carries the row, the severity and the reasons."""
     _, flagged = gate_result
     rows = {
-        r.source_table + ":" + r.row_data["order_id"]: r
+        r.source_table + ":" + _payload(r)["order_id"]: r
         for r in quarantine_rows(flagged, "bronze_order").collect()
     }
 
@@ -215,7 +260,7 @@ def test_quarantine_projection(gate_result):
     assert all(c.message for c in error_row.failed_checks)
 
     # The payload is the row, not the report.
-    payload_keys = set(warn_row.row_data.keys())
+    payload_keys = set(_payload(warn_row))
     assert "net_amount" in payload_keys
     assert "source_file" in payload_keys
     assert not payload_keys & set(RESULT_COLUMNS)

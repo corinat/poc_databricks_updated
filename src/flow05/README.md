@@ -288,7 +288,9 @@ uv run pytest tests/test_quality_gate.py
 # 1 passed, 2 skipped
 ```
 
-The one that passes validates all 46 rule definitions through DQX's own validator and needs no compute. The two that exercise the gate need a Spark session, and skip when the environment has none — compute is named in the Databricks profile (`serverless_compute_id = auto`, a `cluster_id`, or `SPARK_REMOTE`), never enabled implicitly.
+Running them is optional; no requirement asks for tests. The one that passes validates all 46 rule definitions through DQX's own validator and needs no Java and no compute, which is the part worth having in CI. The two that exercise the gate need a Spark session and skip when the environment has none — compute is named in the Databricks profile (`serverless_compute_id = auto`, a `cluster_id`, or `SPARK_REMOTE`), never enabled implicitly.
+
+To run all three offline instead, with OSS pyspark and a JDK 17 or 21, see the command in the module docstring of [tests/test_quality_gate.py](../../tests/test_quality_gate.py). It is verified on macOS; Windows needs the same packages but a different invocation, and possibly `winutils.exe`.
 
 ## Design decisions
 
