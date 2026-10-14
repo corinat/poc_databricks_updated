@@ -11,22 +11,29 @@ rather than tables, so no table is read and none is written. That is the point:
 proving the gate works should not mean inserting rows into bronze_order and
 remembering to delete them.
 
-None of them needs Databricks compute. The spark fixture below prefers a local
-session and only falls back to Databricks Connect when it cannot have one, and
-DQEngine is given a mock workspace client because the checks never call the
-workspace. So with OSS pyspark and a JDK installed, the whole file runs offline:
+None of them needs Databricks compute in principle. The spark fixture below
+prefers a local session, falls back to Databricks Connect, and skips the test if
+it can have neither; DQEngine is given a mock workspace client because the
+checks never call the workspace. So with OSS pyspark and a JDK installed, the
+whole file runs offline:
 
     uv run --no-project --with pyspark --with databricks-labs-dqx==0.16.0 \
         --with pytest --with pyyaml \
-        pytest tests/test_quality_gate.py --noconftest -v
+        pytest tests/test_quality_gate.py -v
 
---noconftest matters: tests/conftest.py starts a Databricks session eagerly in
-pytest_configure, before any test runs, so without it every test waits on
-serverless even when it needs nothing.
+In the project's own environment databricks-connect replaces pyspark and refuses
+local sessions, so the second and third tests need compute named in the
+Databricks profile — `serverless_compute_id = auto`, a cluster_id, or
+SPARK_REMOTE. Without it they skip and the first still runs:
 
-In the project's own environment databricks-connect replaces pyspark and
-refuses local sessions, so there the fixture falls back to remote and the two
-Spark tests pay the serverless start-up.
+    uv run pytest tests/test_quality_gate.py
+    1 passed, 2 skipped
+
+That first test is the one worth having in CI. It puts all 46 rule definitions
+through DQX's own validator, so a misspelled check function or a missing
+argument fails here rather than at the next deploy — something no amount of
+sample data can catch, because data only exercises the rules it happens to
+break.
 """
 
 import datetime
@@ -97,8 +104,17 @@ def spark():
     """A Spark session, local if this environment allows one.
 
     Overrides the session from tests/conftest.py. OSS pyspark gives a local
-    session; databricks-connect's build raises RuntimeError on master(), and
+    session; databricks-connect replaces the builder and refuses master(), and
     then the only option is a remote one.
+
+    If neither is available the tests using this fixture skip rather than
+    error. The difference is how a run reads: an error says the project is
+    broken, a skip says the test needs compute this machine has not been given.
+    Nothing is skipped silently — the reason carries the underlying message.
+
+    test_checks_files_are_valid does not take this fixture. It validates the
+    rule files through DQX's own validator, which is ordinary Python, so it runs
+    everywhere and is the test that guards all 46 rule definitions.
     """
     try:
         return (
@@ -108,10 +124,18 @@ def spark():
             .config("spark.sql.shuffle.partitions", "1")
             .getOrCreate()
         )
-    except RuntimeError:
+    except Exception:
+        pass
+
+    try:
         from databricks.connect import DatabricksSession
 
         return DatabricksSession.builder.getOrCreate()
+    except Exception as exc:
+        pytest.skip(
+            "no Spark session available, so the gate's behaviour is not "
+            f"exercised here: {exc}"
+        )
 
 
 @pytest.fixture()

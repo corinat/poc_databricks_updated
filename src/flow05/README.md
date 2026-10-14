@@ -284,9 +284,11 @@ Because they are errors, neither reaches Silver: `silver_order` has 30 orders, n
 The `warn` half of the gate — a row that reaches Silver *and* the quarantine — is not demonstrated by a file, because such a row would change every downstream number. It is covered by [tests/test_quality_gate.py](../../tests/test_quality_gate.py), which builds orders in memory, runs the real rule files over them, and asserts that an `error` row is kept out of Silver while a `warn`-only row reaches both. Reference frames are built in memory too, so no table is read and none is written.
 
 ```bash
-# validates every rule file; needs no compute
-uv run pytest tests/test_quality_gate.py::test_checks_files_are_valid --noconftest -v
+uv run pytest tests/test_quality_gate.py
+# 1 passed, 2 skipped
 ```
+
+The one that passes validates all 46 rule definitions through DQX's own validator and needs no compute. The two that exercise the gate need a Spark session, and skip when the environment has none — compute is named in the Databricks profile (`serverless_compute_id = auto`, a `cluster_id`, or `SPARK_REMOTE`), never enabled implicitly.
 
 ## Design decisions
 

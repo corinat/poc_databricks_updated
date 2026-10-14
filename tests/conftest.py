@@ -56,17 +56,36 @@ def load_fixture(spark: SparkSession):
     return _loader
 
 
-def _enable_fallback_compute():
-    """Enable serverless compute if no compute is specified."""
-    conf = WorkspaceClient().config
-    if conf.serverless_compute_id or conf.cluster_id or os.environ.get("SPARK_REMOTE"):
-        return
+def _compute_is_configured() -> bool:
+    """Whether this environment already names compute for Databricks Connect.
 
-    url = "https://docs.databricks.com/dev-tools/databricks-connect/cluster-config"
-    print("☁️ no compute specified, falling back to serverless compute", file=sys.stderr)
-    print(f"  see {url} for manual configuration", file=sys.stdout)
+    Changed from the default-python template, which instead set
+    DATABRICKS_SERVERLESS_COMPUTE_ID to "auto" whenever nothing was configured
+    and then opened a session eagerly in pytest_configure. That made every
+    pytest invocation start a serverless session before collecting a single
+    test — including tests that touch no Spark at all — so a plain `uv run
+    pytest` blocked for minutes on a machine with no compute, and `--noconftest`
+    was the only way to run the rule-file test.
 
-    os.environ["DATABRICKS_SERVERLESS_COMPUTE_ID"] = "auto"
+    Compute is now never enabled implicitly. To run the tests that need Spark,
+    name it in your Databricks profile, for example
+
+        serverless_compute_id = auto
+
+    or set a cluster_id, or export SPARK_REMOTE. Without any of those, the
+    tests that need a session skip themselves and the rest run in seconds.
+    """
+    try:
+        conf = WorkspaceClient().config
+    except Exception:
+        # No usable profile. Nothing to connect to, so nothing to initialize.
+        return False
+
+    return bool(
+        conf.serverless_compute_id
+        or conf.cluster_id
+        or os.environ.get("SPARK_REMOTE")
+    )
 
 
 @contextmanager
@@ -81,13 +100,22 @@ def _allow_stderr_output(config: pytest.Config):
 
 
 def pytest_configure(config: pytest.Config):
-    """Configure pytest session."""
-    with _allow_stderr_output(config):
-        _enable_fallback_compute()
+    """Configure pytest session.
 
-        # Initialize Spark session eagerly, so it is available even when
-        # SparkSession.builder.getOrCreate() is used. For DB Connect 15+,
-        # we validate version compatibility with the remote cluster.
+    The eager session is created only when compute is already configured. It is
+    kept for that case because it makes the session available to a test that
+    calls SparkSession.builder.getOrCreate() directly, and it validates version
+    compatibility with the remote cluster up front rather than mid-test.
+
+    With no compute configured this returns immediately and opens no
+    connection. See _compute_is_configured.
+    """
+    if not _compute_is_configured():
+        return
+
+    with _allow_stderr_output(config):
+        # For DB Connect 15+, validate version compatibility with the remote
+        # cluster.
         if hasattr(DatabricksSession.builder, "validateSession"):
             DatabricksSession.builder.validateSession().getOrCreate()
         else:
