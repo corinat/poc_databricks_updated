@@ -31,8 +31,16 @@ TARGET="${1:-dev}"
 
 step() { printf '\n\033[1m── %s\033[0m\n' "$*"; }
 
-# The first two deploys are expected to fail for the triggered jobs, so they do
-# not abort the script. The last one must succeed.
+die() {
+    printf '\n\033[1m%s\033[0m\n' "$1" >&2
+    shift
+    for line in "$@"; do printf '  %s\n' "$line" >&2; done
+    exit 1
+}
+
+# The first deploy is expected to fail for the two jobs whose triggers name
+# tables that do not exist yet, so it does not abort. Every later deploy must
+# succeed, because by then the tables it waits for have been created.
 deploy_partial() {
     step "deploy ($1)"
     databricks bundle deploy -t "$TARGET" || true
@@ -40,12 +48,21 @@ deploy_partial() {
 
 deploy_strict() {
     step "deploy ($1)"
-    databricks bundle deploy -t "$TARGET"
+    databricks bundle deploy -t "$TARGET" || die \
+        "deploy failed, so the job it was meant to create does not exist." \
+        "Nothing after this point can run. The error above is the reason."
 }
 
+# The steps are a dependency chain, so a failure stops the script rather than
+# producing a cascade of failures that buries the one error worth reading.
 run() {
     step "run $1"
-    databricks bundle run "$@" -t "$TARGET"
+    databricks bundle run "$@" -t "$TARGET" || die \
+        "$1 failed, and the steps after it read what it writes. Stopping here." \
+        "The error above is the reason. The most common one on a fresh" \
+        "workspace is an empty volume: the deploy creates the volume, but the" \
+        "input files are uploaded by hand, and a load that finds no file fails" \
+        "on the path. See the First run section of the project README."
 }
 
 # ── 1. Everything except the two jobs whose triggers need existing tables ──

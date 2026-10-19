@@ -39,8 +39,6 @@ import sys
 import yaml
 from databricks.labs.dqx.engine import DQEngine
 from databricks.sdk import WorkspaceClient
-from pyspark.sql import functions as F
-from pyspark.sql.window import Window
 
 # COMMAND ----------
 # ── The shared quality-gate helpers ──
@@ -53,6 +51,7 @@ if common_path not in sys.path:
     sys.path.append(common_path)
 
 from dq import ensure_quarantine_table, write_quarantine
+from transforms import combined_rates
 
 # COMMAND ----------
 # ── Parameters (passed by DABs job as job-level parameters) ──
@@ -94,29 +93,14 @@ SILVER_COLUMNS = [
 # in the Gold build — would reconstruct a fact that is already known here, and
 # would silently label every rate as coming from the CSV if the two ever
 # disagreed about the host. There is nothing to disagree about this way.
-combined = (
-    spark.table(current_table)
-    .withColumn("source_priority", F.lit(1))
-    .withColumn("rate_source", F.lit("NBP_API"))
-    .unionByName(
-        spark.table(hist_view)
-        .withColumn("source_priority", F.lit(2))
-        .withColumn("rate_source", F.lit("HISTORICAL_CSV"))
-    )
-)
-
-# ── Deduplicate: one row per effectiveDate + code ──
-# Number the rows in each group, keep the first, then drop the counter.
-dedup_order = Window.partitionBy("effectiveDate", "code").orderBy(
-    F.col("source_priority").asc(),
-    F.col("ingested_at").desc(),
-)
-
-deduplicated = (
-    combined
-    .withColumn("_rn", F.row_number().over(dedup_order))
-    .filter(F.col("_rn") == 1)
-    .select(*SILVER_COLUMNS)
+# The union and the dedupe live in src/common/transforms.py so the source
+# preference can be called with frames built in memory, which is how
+# tests/test_transforms.py checks that the API wins a date both sources
+# carry.
+deduplicated = combined_rates(
+    spark.table(current_table),
+    spark.table(hist_view),
+    SILVER_COLUMNS,
 )
 
 # COMMAND ----------
@@ -169,6 +153,11 @@ valid_rates, flagged_rates = dq_engine.apply_checks_by_metadata_and_split(
 # replaceUsing deletes the Silver rows whose effectiveDate matches an incoming
 # row, then inserts the incoming rows. Dates absent from the source keep their
 # existing rows.
+#
+# This is the one gate without require_rows_to_write, and the write mode is the
+# reason: an empty valid set carries no dates, so it replaces nothing and the
+# table keeps every row it had. The other six write modes would empty the
+# table, which is what that guard is for.
 (
     valid_rates.write
     .mode("overwrite")

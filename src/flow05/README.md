@@ -174,6 +174,12 @@ Three columns stop at Silver. `sales_channel` is the column the schema-change de
 
 `silver_order_status_history` has no Gold table. DATA_MODEL lists it outside the ER diagram, and the status an order is in now is already on `fact_order`; the history is a separate feed that disagrees with the order files on ten of the twelve orders they share, so nothing in the star schema is derived from it.
 
+## The dedupe has a test
+
+The rename, the casts and the dedupe live in [src/common/transforms.py](../common/transforms.py) as `cleaned_orders`, and this notebook calls it. The SQL is unchanged.
+
+It is tested because the dedupe's decision is unguarded. `is_unique` on `order_id` proves there is one row per order; it says nothing about which of the three deliveries survived. The observable difference is `sales_channel` — present on the eight orders the schema-change delivery replays, absent otherwise — and that column is in no rule and not in `FACT_ORDER`. Reverse the `ORDER BY` and the widened column is empty on every row, with nothing failing anywhere. Flow 05 asks for the widening to be demonstrated, and the demonstration lives in that column.
+
 ## Data quality
 
 Rules live in [checks/silver_order.yml](../../checks/silver_order.yml), shipped by the bundle and passed to the notebook as the `checks_path` parameter.

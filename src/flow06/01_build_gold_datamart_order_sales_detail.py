@@ -82,6 +82,25 @@
 # currency is ever changed.
 
 # COMMAND ----------
+import sys
+
+# COMMAND ----------
+# ── The transformation, as an importable function ──
+# src/common/transforms.py is a plain module, not a notebook. Its directory is
+# given by the common_path job parameter, resolved from workspace.file_path, and
+# appended to sys.path so the import below resolves in every bundle target.
+# The transformation lives there so it can be called with frames built in
+# memory, which is how tests/test_transforms.py exercises the rate selection
+# and the invoice dedupe. What runs here is unchanged: the function receives
+# this notebook's tables.
+dbutils.widgets.text("common_path", "../common")
+common_path = dbutils.widgets.get("common_path")
+if common_path not in sys.path:
+    sys.path.append(common_path)
+
+from transforms import order_sales_detail
+
+# COMMAND ----------
 # ── Parameters (passed by DABs job as job-level parameters) ──
 # DABs dev mode prefixes schema names with dev_<username>_.
 # Compute the correct default so interactive runs match the bundle.
@@ -149,86 +168,15 @@ MART_COLUMNS = [
 # COMMAND ----------
 
 # ── The joined mart ──
-# Two CTEs reduce the many-row sources to one row per order before they are
-# joined, which is what keeps the grain. The third holds the joined row so
-# order_amount_pln can be derived from the resolved rate without repeating
-# the coalesce.
-detail = spark.sql(f"""
-WITH invoice_per_order AS (
-    SELECT order_id, invoice_id, seller_id, vat_amount, gross_amount
-    FROM {fact_invoice}
-    WHERE order_id IS NOT NULL
-    QUALIFY row_number() OVER (
-        PARTITION BY order_id
-        ORDER BY invoice_date DESC, invoice_id DESC
-    ) = 1
-),
-
--- Every rate published on or before the order date qualifies; the latest of
--- them wins. An inner join here and a left join below, so an order with no
--- rate keeps its row and gets a NULL.
-rate_per_order AS (
-    SELECT o.order_id, r.rate_to_pln
-    FROM {fact_order} AS o
-    JOIN {fact_exchange_rate} AS r
-      ON r.currency_code = o.currency_code
-     AND r.rate_date <= o.order_date
-    QUALIFY row_number() OVER (
-        PARTITION BY o.order_id
-        ORDER BY r.rate_date DESC
-    ) = 1
-),
-
-joined AS (
-    SELECT
-        o.order_id,
-        o.order_date,
-        o.customer_id,
-        o.product_id,
-        i.seller_id,
-        o.currency_code,
-        p.category AS product_category,
-        i.invoice_id,
-        o.quantity,
-        o.net_amount,
-        i.vat_amount,
-        i.gross_amount,
-        -- The reporting currency converts at 1; everything else needs a
-        -- published rate.
-        coalesce(
-            r.rate_to_pln,
-            CASE WHEN c.is_reporting_currency THEN CAST(1 AS DECIMAL(18,6)) END
-        ) AS rate_to_pln,
-        o.status AS order_status
-    FROM {fact_order} AS o
-    LEFT JOIN {dim_customer}   AS cu ON o.customer_id   = cu.customer_id
-    LEFT JOIN {dim_product}    AS p  ON o.product_id    = p.product_id
-    LEFT JOIN {dim_currency}   AS c  ON o.currency_code = c.currency_code
-    LEFT JOIN invoice_per_order AS i ON o.order_id      = i.order_id
-    LEFT JOIN {dim_seller}     AS s  ON i.seller_id     = s.seller_id
-    LEFT JOIN rate_per_order   AS r  ON o.order_id      = r.order_id
+detail = order_sales_detail(
+    fact_order=spark.table(fact_order),
+    fact_invoice=spark.table(fact_invoice),
+    fact_exchange_rate=spark.table(fact_exchange_rate),
+    dim_customer=spark.table(dim_customer),
+    dim_product=spark.table(dim_product),
+    dim_currency=spark.table(dim_currency),
+    dim_seller=spark.table(dim_seller),
 )
-
-SELECT
-    order_id,
-    order_date,
-    customer_id,
-    product_id,
-    seller_id,
-    currency_code,
-    product_category,
-    invoice_id,
-    quantity,
-    net_amount,
-    vat_amount,
-    gross_amount,
-    rate_to_pln,
-    -- The delivered column flow 06 asks the rate join to produce. NULL when
-    -- no rate applies, rather than silently falling back to the net amount.
-    CAST(round(net_amount * rate_to_pln, 2) AS DECIMAL(18,2)) AS order_amount_pln,
-    order_status
-FROM joined
-""")
 
 # COMMAND ----------
 

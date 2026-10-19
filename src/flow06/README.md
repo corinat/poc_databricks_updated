@@ -139,6 +139,18 @@ The measures are cast to `DECIMAL(18,2)` before the unpivot. `unpivot` collapses
 
 **`metric_value` has no unit.** A row holding 4 items and a row holding 255.98 PLN look alike, and only `metric_name` tells them apart. Nothing downstream may sum across `metric_name`.
 
+## What the tests cover, and why it is not the same thing
+
+The detail mart's row resolution lives in [src/common/transforms.py](../common/transforms.py) as `order_sales_detail`, and the notebook calls it. [tests/test_transforms.py](../../tests/test_transforms.py) exercises three branches of it that a job run does not:
+
+| Branch | Why a run misses it |
+|---|---|
+| the rate falls back to an earlier date | rates cover every order date in the data, so the match is always exact |
+| the reporting currency converts at 1 | there are no PLN orders |
+| two invoices for one order collapse to one row | no order has two invoices |
+
+The tests and `check_marts` are not alternatives. `check_marts` asserts invariants over whatever data a run produced; the tests assert behaviour over inputs chosen to reach code the data cannot. Neither replaces the other, and neither restates a DQX rule.
+
 ## The check task
 
 `05_check_marts.py` runs the three checks sections 3 and 4 ask for, writes nothing, and fails the job if any of them fails.

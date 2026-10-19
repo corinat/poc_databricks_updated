@@ -81,7 +81,13 @@ common_path = dbutils.widgets.get("common_path")
 if common_path not in sys.path:
     sys.path.append(common_path)
 
-from dq import ensure_quarantine_table, require_references, write_quarantine
+from dq import (
+    ensure_quarantine_table,
+    require_references,
+    require_rows_to_write,
+    write_quarantine,
+)
+from transforms import cleaned_orders
 
 # COMMAND ----------
 # ── Parameters (passed by DABs job as job-level parameters) ──
@@ -152,26 +158,12 @@ ensure_quarantine_table(spark, quarantine_table)
 # ── Dedupe and cast ──
 # The cleaning, with no write of its own: the result is the DataFrame the
 # checks run against.
-orders = spark.sql(f"""
-SELECT
-    order_id,
-    CAST(customer_id AS INT)            AS customer_id,
-    product_id,
-    currency                            AS currency_code,
-    CAST(order_date AS DATE)            AS order_date,
-    CAST(quantity AS INT)               AS quantity,
-    CAST(unit_price AS DECIMAL(18,2))   AS unit_price,
-    CAST(order_amount AS DECIMAL(18,2)) AS net_amount,
-    lower(trim(status))                 AS status,
-    sales_channel,
-    source_file,
-    ingested_at
-FROM {bronze_table}
-QUALIFY row_number() OVER (
-    PARTITION BY order_id
-    ORDER BY ingested_at DESC, order_date DESC
-) = 1
-""")
+# The rename, the casts and the dedupe live in src/common/transforms.py, so
+# they can be called with a frame built in memory — which is how
+# tests/test_transforms.py checks that the newest delivery wins, and so that
+# the replayed orders keep their sales_channel.
+orders = cleaned_orders(spark.table(bronze_table))
+
 
 # COMMAND ----------
 
@@ -196,6 +188,13 @@ valid_orders, flagged_orders = dq_engine.apply_checks_by_metadata_and_split(
 )
 
 # COMMAND ----------
+
+# ── Nothing passed means nothing to write ──
+# The merge below deletes the rows the source no longer carries, so an
+# empty valid set would empty the table from a run that reports success.
+# require_references above sees one way to get here, an empty reference
+# table; this sees the rest.
+require_rows_to_write(valid_orders, table_name)
 
 # ── Upsert the rows that passed, and drop what stops passing ──
 # The third clause is what makes the gate able to take a row back out. The
