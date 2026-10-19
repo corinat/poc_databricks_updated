@@ -76,75 +76,75 @@ def customer_hierarchy(spark, source: str, country_expr: str):
                 source_file,
                 ingested_at
             FROM {source}
-    ),
+        ),
 
-    -- One row per customer_id, newest batch first.
-    deduped AS (
-        SELECT customer_id, customer_name, country_code, parent_customer_id,
-            source_file, ingested_at
-        FROM cleaned
-        QUALIFY row_number() OVER (
-            PARTITION BY customer_id
-            ORDER BY ingested_at DESC, source_file
-        ) = 1
-    ),
+        -- One row per customer_id, newest batch first.
+        deduped AS (
+            SELECT customer_id, customer_name, country_code, parent_customer_id,
+                source_file, ingested_at
+            FROM cleaned
+            QUALIFY row_number() OVER (
+                PARTITION BY customer_id
+                ORDER BY ingested_at DESC, source_file
+            ) = 1
+        ),
 
-    -- Anchor: the customers that start a tree. Either they have no parent, or
-    -- their parent is not in the data, which would otherwise leave them and
-    -- everything under them unreachable by the recursion. Such a row is
-    -- identifiable afterwards as level = 0 with a parent_customer_id set.
-    -- NOT EXISTS, not NOT IN: a NULL customer_id anywhere in deduped would make
-    -- NOT IN evaluate to NULL for every row and the branch would never fire.
-    -- Then one generation per recursive step, carrying the root id down and
-    -- appending to the path.
-    hierarchy AS (
+        -- Anchor: the customers that start a tree. Either they have no parent, or
+        -- their parent is not in the data, which would otherwise leave them and
+        -- everything under them unreachable by the recursion. Such a row is
+        -- identifiable afterwards as level = 0 with a parent_customer_id set.
+        -- NOT EXISTS, not NOT IN: a NULL customer_id anywhere in deduped would make
+        -- NOT IN evaluate to NULL for every row and the branch would never fire.
+        -- Then one generation per recursive step, carrying the root id down and
+        -- appending to the path.
+        hierarchy AS (
+            SELECT
+                customer_id,
+                customer_name,
+                country_code,
+                parent_customer_id,
+                0             AS level,
+                customer_name AS hierarchy_path,
+                customer_id   AS root_customer_id,
+                source_file,
+                ingested_at
+            FROM deduped AS child
+            WHERE child.parent_customer_id IS NULL
+            OR NOT EXISTS (
+                SELECT 1
+                FROM deduped AS candidate_parent
+                WHERE candidate_parent.customer_id = child.parent_customer_id
+            )
+
+            UNION ALL
+
+            SELECT
+                child.customer_id,
+                child.customer_name,
+                child.country_code,
+                child.parent_customer_id,
+                parent.level + 1,
+                concat(parent.hierarchy_path, ' > ', child.customer_name),
+                parent.root_customer_id,
+                child.source_file,
+                child.ingested_at
+            FROM deduped AS child
+            JOIN hierarchy AS parent
+            ON child.parent_customer_id = parent.customer_id
+        )
+
         SELECT
             customer_id,
             customer_name,
             country_code,
             parent_customer_id,
-            0             AS level,
-            customer_name AS hierarchy_path,
-            customer_id   AS root_customer_id,
+            level,
+            hierarchy_path,
+            root_customer_id,
             source_file,
             ingested_at
-        FROM deduped AS child
-        WHERE child.parent_customer_id IS NULL
-        OR NOT EXISTS (
-            SELECT 1
-            FROM deduped AS candidate_parent
-            WHERE candidate_parent.customer_id = child.parent_customer_id
-        )
-
-        UNION ALL
-
-        SELECT
-            child.customer_id,
-            child.customer_name,
-            child.country_code,
-            child.parent_customer_id,
-            parent.level + 1,
-            concat(parent.hierarchy_path, ' > ', child.customer_name),
-            parent.root_customer_id,
-            child.source_file,
-            child.ingested_at
-        FROM deduped AS child
-        JOIN hierarchy AS parent
-        ON child.parent_customer_id = parent.customer_id
-    )
-
-    SELECT
-        customer_id,
-        customer_name,
-        country_code,
-        parent_customer_id,
-        level,
-        hierarchy_path,
-        root_customer_id,
-        source_file,
-        ingested_at
-    FROM hierarchy
-    """)
+        FROM hierarchy
+        """)
 
 
 def order_sales_detail(
@@ -248,7 +248,7 @@ def order_sales_detail(
             F.coalesce(
                 F.col("rt.rate_to_pln"),
                 F.when(F.col("c.is_reporting_currency"),
-                       F.lit(1).cast("decimal(18,6)")),
+                    F.lit(1).cast("decimal(18,6)")),
             ).alias("rate_to_pln"),
             F.col("o.status").alias("order_status"),
         )
@@ -262,7 +262,7 @@ def order_sales_detail(
         "currency_code", "product_category", "invoice_id", "quantity",
         "net_amount", "vat_amount", "gross_amount", "rate_to_pln",
         F.round(F.col("net_amount") * F.col("rate_to_pln"), 2)
-         .cast("decimal(18,2)").alias("order_amount_pln"),
+        .cast("decimal(18,2)").alias("order_amount_pln"),
         "order_status",
     )
 
