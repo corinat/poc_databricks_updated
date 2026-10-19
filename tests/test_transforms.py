@@ -80,11 +80,17 @@ def spark():
         pytest.skip(f"no Spark session available: {exc}")
 
 
+def _frame(spark, rows, schema: str):
+    """Rows as a DataFrame. Three of the four transformations take frames."""
+    return spark.createDataFrame(list(rows), schema=schema)
+
+
 def _view(spark, name: str, rows: list[dict], schema: str):
     """Register rows as a temporary view and return its name.
 
-    The transformations take names rather than frames, so a test passes views
-    and a notebook passes tables, and the SQL is identical for both.
+    Only customer_hierarchy needs this: it is the one transformation written in
+    SQL, because a recursive CTE has no DataFrame-API form, so it takes a name
+    rather than a frame.
     """
     spark.createDataFrame(rows, schema=schema).createOrReplaceTempView(name)
     return name
@@ -189,42 +195,42 @@ _DEFAULT_CURRENCIES = [
 
 
 def _detail(spark, orders, rates, invoices=(), currencies=None):
-    """Run order_sales_detail over views this call defines, keyed by order_id.
+    """Run order_sales_detail over frames this call builds, keyed by order_id.
 
     Each test supplies only the rows it cares about; the dimensions default to
     one row each, enough for the left joins to resolve.
     """
-    names = {
-        "fact_order": _view(spark, "t_fact_order", list(orders), _ORDER_SCHEMA),
-        "fact_exchange_rate": _view(spark, "t_fact_rate", list(rates), _RATE_SCHEMA),
-        "fact_invoice": _view(spark, "t_fact_invoice", list(invoices), _INVOICE_SCHEMA),
-        "dim_currency": _view(
-            spark, "t_dim_currency",
-            list(currencies if currencies is not None else _DEFAULT_CURRENCIES),
-            "currency_code string, currency_name string, "
-            "decimal_places int, is_reporting_currency boolean"),
-        "dim_customer": _view(
-            spark, "t_dim_customer",
+    detail = order_sales_detail(
+        fact_order=_frame(spark, orders, _ORDER_SCHEMA),
+        fact_invoice=_frame(spark, invoices, _INVOICE_SCHEMA),
+        fact_exchange_rate=_frame(spark, rates, _RATE_SCHEMA),
+        dim_customer=_frame(
+            spark,
             [{"customer_id": 1, "customer_name": "C", "customer_type": None,
               "country_code": "PL", "parent_customer_id": None}],
             "customer_id int, customer_name string, customer_type string, "
             "country_code string, parent_customer_id int"),
-        "dim_product": _view(
-            spark, "t_dim_product",
+        dim_product=_frame(
+            spark,
             [{"product_id": "P-001", "product_name": "P", "category": "apparel",
               "list_price": Decimal("10.00"), "unit_of_measure": None}],
             "product_id string, product_name string, category string, "
             "list_price decimal(18,2), unit_of_measure string"),
-        "dim_seller": _view(
-            spark, "t_dim_seller",
+        dim_currency=_frame(
+            spark,
+            currencies if currencies is not None else _DEFAULT_CURRENCIES,
+            "currency_code string, currency_name string, "
+            "decimal_places int, is_reporting_currency boolean"),
+        dim_seller=_frame(
+            spark,
             [{"seller_id": "SEL-001", "seller_name": "S", "tax_id": "1",
               "address": "a", "postal_code": "1", "city": "c",
               "country": "PL", "currency_code": "PLN"}],
             "seller_id string, seller_name string, tax_id string, "
             "address string, postal_code string, city string, "
             "country string, currency_code string"),
-    }
-    return {r.order_id: r for r in order_sales_detail(spark, **names).collect()}
+    )
+    return {r.order_id: r for r in detail.collect()}
 
 
 def _order(order_id, currency, order_date, net="100.00", status="paid"):
@@ -339,9 +345,7 @@ def test_newest_delivery_of_an_order_wins(spark):
     Silver and appears in no rule, so reversing the sort would empty it on
     every row with nothing failing.
     """
-    source = _view(
-        spark,
-        "t_bronze_order",
+    orders = spark.createDataFrame(
         [
             # the batch file, first and without the widened column
             _bronze_order("O-1", "orders.parquet", dt.datetime(2026, 2, 1, 10, 0)),
@@ -349,10 +353,10 @@ def test_newest_delivery_of_an_order_wins(spark):
             _bronze_order("O-1", "orders_schema_change.parquet",
                           dt.datetime(2026, 2, 1, 12, 0), sales_channel="mobile"),
         ],
-        _BRONZE_ORDER_SCHEMA,
+        schema=_BRONZE_ORDER_SCHEMA,
     )
 
-    rows = cleaned_orders(spark, source).collect()
+    rows = cleaned_orders(orders).collect()
 
     assert len(rows) == 1, "one row per order_id, whatever the deliveries repeat"
     assert rows[0].source_file == "orders_schema_change.parquet"
@@ -366,14 +370,12 @@ def test_newest_delivery_of_an_order_wins(spark):
 
 def test_status_is_lowercased_and_trimmed(spark):
     """Status feeds a DQX allowed-list rule, so its shape is load-bearing."""
-    source = _view(
-        spark,
-        "t_bronze_order_status",
+    orders = spark.createDataFrame(
         [_bronze_order("O-1", "orders.parquet", dt.datetime(2026, 2, 1), status="  PAID ")],
-        _BRONZE_ORDER_SCHEMA,
+        schema=_BRONZE_ORDER_SCHEMA,
     )
 
-    assert cleaned_orders(spark, source).collect()[0].status == "paid"
+    assert cleaned_orders(orders).collect()[0].status == "paid"
 
 
 # ── Which rate source wins a date both of them carry ──

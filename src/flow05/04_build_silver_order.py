@@ -158,11 +158,11 @@ ensure_quarantine_table(spark, quarantine_table)
 # ── Dedupe and cast ──
 # The cleaning, with no write of its own: the result is the DataFrame the
 # checks run against.
-# The SQL lives in src/common/transforms.py so the dedupe can be called
-# with a view over frames built in memory, which is how
-# tests/test_transforms.py checks that the newest delivery wins and so that
+# The rename, the casts and the dedupe live in src/common/transforms.py, so
+# they can be called with a frame built in memory — which is how
+# tests/test_transforms.py checks that the newest delivery wins, and so that
 # the replayed orders keep their sales_channel.
-orders = cleaned_orders(spark, bronze_table)
+orders = cleaned_orders(spark.table(bronze_table))
 
 
 # COMMAND ----------

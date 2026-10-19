@@ -89,10 +89,10 @@ import sys
 # src/common/transforms.py is a plain module, not a notebook. Its directory is
 # given by the common_path job parameter, resolved from workspace.file_path, and
 # appended to sys.path so the import below resolves in every bundle target.
-# The SQL lives there so it can be called with views over frames built in
-# memory, which is how tests/test_transforms.py exercises the rate selection and
-# the invoice dedupe. What runs here is unchanged: the function receives this
-# notebook's table names.
+# The transformation lives there so it can be called with frames built in
+# memory, which is how tests/test_transforms.py exercises the rate selection
+# and the invoice dedupe. What runs here is unchanged: the function receives
+# this notebook's tables.
 dbutils.widgets.text("common_path", "../common")
 common_path = dbutils.widgets.get("common_path")
 if common_path not in sys.path:
@@ -169,14 +169,13 @@ MART_COLUMNS = [
 
 # ── The joined mart ──
 detail = order_sales_detail(
-    spark,
-    fact_order=fact_order,
-    fact_invoice=fact_invoice,
-    fact_exchange_rate=fact_exchange_rate,
-    dim_customer=dim_customer,
-    dim_product=dim_product,
-    dim_currency=dim_currency,
-    dim_seller=dim_seller,
+    fact_order=spark.table(fact_order),
+    fact_invoice=spark.table(fact_invoice),
+    fact_exchange_rate=spark.table(fact_exchange_rate),
+    dim_customer=spark.table(dim_customer),
+    dim_product=spark.table(dim_product),
+    dim_currency=spark.table(dim_currency),
+    dim_seller=spark.table(dim_seller),
 )
 
 # COMMAND ----------
