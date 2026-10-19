@@ -72,6 +72,11 @@ resources:
           default: ${var.catalog}
         - name: gold_schema
           default: ${resources.schemas.gold.name}
+        # Directory of src/common/transforms.py in the deployed bundle,
+        # appended to sys.path by the detail mart notebook so its import
+        # resolves. Same mechanism the DQX gates use for src/common/dq.py.
+        - name: common_path
+          default: ${workspace.file_path}/src/common
 
       tasks:
         # Section 3: one joined row per order, the source of every sink below.

@@ -108,6 +108,12 @@ The one Gold build in the project that renames. Silver keeps the NBP API's own c
 
 Two columns stop at Silver: `currency` is the currency's name, which belongs to `DIM_CURRENCY` as `currency_name` rather than to a fact, and `no` is the NBP bulletin number, which the model does not declare.
 
+## The source preference has a test
+
+The union of the two rate sources and the dedupe between them live in [src/common/transforms.py](../common/transforms.py) as `combined_rates`, and step 4 calls it.
+
+It is tested for the same reason as flow 05's dedupe: `is_unique` on (`effectiveDate`, `code`) proves one row per pair and says nothing about which source won. The API has to win a date both carry, because it is the bank's own publication and the CSV is a copy. Reverse `source_priority` and every overlapping date is labelled `HISTORICAL_CSV` **and converted at the CSV's rate** — and no rule would object, because none mentions `rate_source` and nothing downstream reads it.
+
 ## Data quality
 
 The gate runs at the Bronze to Silver boundary. Rules live in [checks/silver_exchange_rate.yml](../../checks/silver_exchange_rate.yml), not in the notebook, and the bundle ships the file to the workspace — the notebook receives its path as the `checks_path` job parameter.

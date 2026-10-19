@@ -85,6 +85,44 @@ def require_references(ref_dfs: dict) -> None:
         )
 
 
+def require_rows_to_write(valid_df, target: str) -> None:
+    """Fail if a gate passed nothing, before a write that deletes.
+
+    A per-row DQX rule cannot express this. Each rule answers a question about
+    one row and routes it to valid or to the quarantine; whether the valid set
+    came out empty is a property of the result, so it is checked here.
+
+    It matters where the write removes rows the source no longer carries. An
+    empty valid set then deletes the whole table, from a run that reports
+    success — and an emptied Silver table empties the Gold table overwritten
+    from it, and the marts built on that.
+
+    require_references covers one way to arrive here: a reference table that is
+    empty, so every foreign key check fails. This covers the rest, which that
+    one cannot see — a truncated source, a rule that starts rejecting
+    everything, or a reference table that is present but holds the wrong
+    values, such as a currency list replaced by one that names none of the
+    currencies in use.
+
+    An empty valid set is never a state worth writing: either there was nothing
+    to load, or the gate rejected all of it, and neither is a reason to empty
+    the target.
+
+    Called from six of the seven gates: the five that write with INSERT
+    OVERWRITE and the one that merges with a delete clause. Not from
+    silver_exchange_rate, which writes with replaceUsing — that deletes only
+    the dates the incoming frame carries, so an empty frame deletes nothing and
+    the table it would protect is already safe.
+    """
+    if valid_df.isEmpty():
+        raise RuntimeError(
+            f"The quality gate passed no rows, so writing to {target} would "
+            "delete every row it holds. Either the source is empty or every "
+            "row failed a check: the reasons are in the quarantine for this "
+            "run. Nothing was written."
+        )
+
+
 def quarantine_rows(flagged_df, source_table: str):
     """Project DQX's flagged rows into the shared quarantine table's shape.
 

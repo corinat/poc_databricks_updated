@@ -61,7 +61,11 @@ common_path = dbutils.widgets.get("common_path")
 if common_path not in sys.path:
     sys.path.append(common_path)
 
-from dq import ensure_quarantine_table, write_quarantine
+from dq import (
+    ensure_quarantine_table,
+    require_rows_to_write,
+    write_quarantine,
+)
 
 # COMMAND ----------
 # ── Parameters (passed by DABs job as job-level parameters) ──
@@ -230,6 +234,15 @@ ref_dfs = {
 valid_invoices, flagged_invoices = dq_engine.apply_checks_by_metadata_and_split(
     invoices, checks, ref_dfs=ref_dfs
 )
+
+# COMMAND ----------
+
+# ── Nothing passed means nothing to write ──
+# The write below replaces every row, so an empty valid set would empty
+# the table from a run that reports success. An empty valid set is never
+# worth writing: either there was nothing to load, or the gate rejected
+# all of it.
+require_rows_to_write(valid_invoices, table_name)
 
 # COMMAND ----------
 

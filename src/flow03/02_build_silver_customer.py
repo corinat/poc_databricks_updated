@@ -44,7 +44,12 @@ common_path = dbutils.widgets.get("common_path")
 if common_path not in sys.path:
     sys.path.append(common_path)
 
-from dq import ensure_quarantine_table, write_quarantine
+from dq import (
+    ensure_quarantine_table,
+    require_rows_to_write,
+    write_quarantine,
+)
+from transforms import customer_hierarchy
 
 # COMMAND ----------
 # ── Parameters (passed by DABs job as job-level parameters) ──
@@ -118,87 +123,11 @@ SILVER_COLUMNS = [
 
 # ── Clean, dedupe, then walk the hierarchy ──
 # No write here: the result is the frame the checks run against.
-# A cycle in parent_customer_id would recurse forever; Spark's recursion level
-# limit stops it and fails the task instead.
-customers = spark.sql(f"""
-WITH RECURSIVE cleaned AS (
-    SELECT
-        CAST(trim(customer_id) AS INT)                    AS customer_id,
-        trim(customer_name)                               AS customer_name,
-        upper(trim({country_expr}))                       AS country_code,
-        CAST(nullif(trim(parent_customer_id), '') AS INT) AS parent_customer_id,
-        source_file,
-        ingested_at
-    FROM {bronze_table}
-),
-
--- One row per customer_id, newest batch first.
-deduped AS (
-    SELECT customer_id, customer_name, country_code, parent_customer_id,
-           source_file, ingested_at
-    FROM cleaned
-    QUALIFY row_number() OVER (
-        PARTITION BY customer_id
-        ORDER BY ingested_at DESC, source_file
-    ) = 1
-),
-
--- Anchor: the customers that start a tree. Either they have no parent, or
--- their parent is not in the data, which would otherwise leave them and
--- everything under them unreachable by the recursion. Such a row is
--- identifiable afterwards as level = 0 with a parent_customer_id set.
--- NOT EXISTS, not NOT IN: a NULL customer_id anywhere in deduped would make
--- NOT IN evaluate to NULL for every row and the branch would never fire.
--- Then one generation per recursive step, carrying the root id down and
--- appending to the path.
-hierarchy AS (
-    SELECT
-        customer_id,
-        customer_name,
-        country_code,
-        parent_customer_id,
-        0             AS level,
-        customer_name AS hierarchy_path,
-        customer_id   AS root_customer_id,
-        source_file,
-        ingested_at
-    FROM deduped AS child
-    WHERE child.parent_customer_id IS NULL
-     OR NOT EXISTS (
-           SELECT 1
-           FROM deduped AS candidate_parent
-           WHERE candidate_parent.customer_id = child.parent_customer_id
-       )
-
-    UNION ALL
-
-    SELECT
-        child.customer_id,
-        child.customer_name,
-        child.country_code,
-        child.parent_customer_id,
-        parent.level + 1,
-        concat(parent.hierarchy_path, ' > ', child.customer_name),
-        parent.root_customer_id,
-        child.source_file,
-        child.ingested_at
-    FROM deduped AS child
-    JOIN hierarchy AS parent
-      ON child.parent_customer_id = parent.customer_id
-)
-
-SELECT
-    customer_id,
-    customer_name,
-    country_code,
-    parent_customer_id,
-    level,
-    hierarchy_path,
-    root_customer_id,
-    source_file,
-    ingested_at
-FROM hierarchy
-""")
+# The SQL lives in src/common/transforms.py so it can be called with a view
+# over frames built in memory, which is how tests/test_transforms.py exercises
+# the recursion, the orphan anchor and the dedupe. Nothing about what runs here
+# changes: the function receives this notebook's table name.
+customers = customer_hierarchy(spark, bronze_table, country_expr)
 
 # COMMAND ----------
 
@@ -214,6 +143,15 @@ dq_engine = DQEngine(WorkspaceClient())
 valid_customers, flagged_customers = dq_engine.apply_checks_by_metadata_and_split(
     customers, checks, ref_dfs={"silver_customer": customers}
 )
+
+# COMMAND ----------
+
+# ── Nothing passed means nothing to write ──
+# The write below replaces every row, so an empty valid set would empty
+# the table from a run that reports success. An empty valid set is never
+# worth writing: either there was nothing to load, or the gate rejected
+# all of it.
+require_rows_to_write(valid_customers, table_name)
 
 # COMMAND ----------
 

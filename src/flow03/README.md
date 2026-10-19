@@ -96,6 +96,12 @@ The three hierarchy columns stop at Silver. `level`, `hierarchy_path` and `root_
 
 `customer_type` is declared and always NULL. Neither customer file has a source for it. It is declared rather than omitted because Gold is the published contract and DATA_MODEL.md is a deliverable: a table with four columns against a model that declares five means the diagram and the table disagree. NULL makes the gap visible in the data.
 
+## The hierarchy is the one transformation with tests
+
+The recursive walk lives in [src/common/transforms.py](../common/transforms.py) as `customer_hierarchy`, and this notebook calls it. The SQL is unchanged; what changes is that it can be called with a view over frames built in memory, which is what [tests/test_transforms.py](../../tests/test_transforms.py) does.
+
+It is the one piece of Silver worth testing, because its output is unguarded in both directions: no DQX rule mentions `level`, `hierarchy_path` or `root_customer_id`, and none of the three reaches `dim_customer`. A regression would surface in no quarantine row, no mart, no dashboard panel and no `check_marts` failure. Two tests cover it — three generations plus an orphan whose parent is absent, and the dedupe keeping the newest batch.
+
 ## Data quality
 
 The gate runs at the Bronze to Silver boundary, on the finished hierarchy. It has to run there rather than earlier: the recursion that produces `level` and `hierarchy_path` is a recursive CTE and so happens in SQL, and checking before it would mean making the valid frame addressable from SQL through a temp view, which [docs/EXERCISE.md](../../docs/EXERCISE.md) rules out.
