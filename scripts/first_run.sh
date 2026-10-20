@@ -38,9 +38,16 @@ die() {
     exit 1
 }
 
-# The first deploy is expected to fail for the two jobs whose triggers name
-# tables that do not exist yet, so it does not abort. Every later deploy must
-# succeed, because by then the tables it waits for have been created.
+# A deploy is tolerant while a job's trigger still names a table that does not
+# exist, and strict once none of them do. There are two such deploys before the
+# last one, because the two triggered jobs become creatable at different
+# points: build_silver_exchange_rate once bronze_currency exists, and
+# build_gold_marts only after build_silver_exchange_rate has run and produced
+# fact_exchange_rate.
+#
+# A tolerant deploy hides a real failure, so the run that follows it is what
+# checks the job was actually created: `bundle run` on a job that does not
+# exist fails, and run() stops the script.
 deploy_partial() {
     step "deploy ($1)"
     databricks bundle deploy -t "$TARGET" || true
@@ -66,7 +73,7 @@ run() {
 }
 
 # ── 1. Everything except the two jobs whose triggers need existing tables ──
-deploy_partial "build_silver_exchange_rate and build_gold_marts are expected to fail here"
+deploy_partial "both triggered jobs are expected to fail here"
 
 # ── 2. The loads that create the dimensions, in dependency order ──
 # silver_order's quality gate reads silver_customer, bronze_product and
@@ -85,7 +92,7 @@ run load_order_status
 run load_bronze_invoice
 
 # ── 4. bronze_currency exists now, so the exchange rate job can be created ──
-deploy_strict "creates build_silver_exchange_rate"
+deploy_partial "creates build_silver_exchange_rate; build_gold_marts still cannot be created"
 run build_silver_exchange_rate
 
 # ── 5. The seven star-schema tables exist now, so the mart job can be created ──

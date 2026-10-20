@@ -20,10 +20,11 @@ no DQX rule would notice going wrong.
                                       invoices, and the row_number is the only
                                       thing keeping the mart's grain.
 
-Deliberately not here: anything the 45 DQX rules already assert, the three
-checks flow 06's check_marts runs against real data on every job run, the
-dimension and fact projections whose shape is pinned in DDL, and the summary,
-pivot and unpivot, whose output is in the row counts each README documents.
+Deliberately not here: anything the 46 DQX rules already assert, the five
+checks flow 06's check_marts runs against real data on every job run, and the
+dimension and fact projections whose shape is pinned in DDL. The summary, the
+pivot and the unpivot are reconciled by three of those five checks against the
+table each was built from.
 
 Running these needs a Spark session. The simplest source is the workspace:
 put `serverless_compute_id = auto` in the Databricks profile and

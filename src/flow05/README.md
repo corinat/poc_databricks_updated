@@ -46,7 +46,7 @@ So `bronze_order` holds 48 rows: the second and third files replay rows the firs
 
 ### The fourth file is deliberately invalid
 
-`orders_stream_bad_data.parquet` exists so that a run of this project produces a real quarantine row, which EXERCISE deliverable 6 asks for. Without it the quarantine stays empty, because every row in the other three files passes all 45 rules.
+`orders_stream_bad_data.parquet` exists so that a run of this project produces a real quarantine row, which EXERCISE deliverable 6 asks for. Without it the quarantine stays empty, because every row in the other three files passes all 46 rules.
 
 Its name is load-bearing: step 2's Auto Loader filters on `orders_stream*.parquet`, so the file is picked up by the existing stream with no code of its own, and the checkpoint loads it exactly once. Its schema is identical to `orders_stream.parquet` — the same nine columns, the same types, `currency` and `order_amount` under their Bronze names — because Auto Loader runs with `schemaEvolutionMode: addNewColumns` and a stray column would evolve the table rather than be rejected.
 

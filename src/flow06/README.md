@@ -153,7 +153,7 @@ The tests and `check_marts` are not alternatives. `check_marts` asserts invarian
 
 ## The check task
 
-`05_check_marts.py` runs the three checks sections 3 and 4 ask for, writes nothing, and fails the job if any of them fails.
+`05_check_marts.py` runs five checks — the three sections 3 and 4 ask for, and two reconciliations between the marts — writes nothing, and fails the job if any of them fails.
 
 It is a task of its own rather than code at the end of the notebooks that write the tables. A check at the end of a build runs after the write has committed, so it can only report a table it has no power to stop. Here a failure fails the job, and flow 07's dashboard refresh and alerts — which hang off this job — do not run against numbers that did not add up.
 
@@ -162,10 +162,14 @@ It is a task of its own rather than code at the end of the notebooks that write 
 | Grain and cardinality | §3: "re-check the grain stays one row per `order_id`", "confirm cardinality per join" | the mart's rows, its distinct `order_id` and `fact_order`'s rows must all be equal |
 | Currency codes | §4: "use `distinct` only to validate inputs … not as a table of its own" | `distinct` on the mart's `currency_code`, compared to `dim_currency` and discarded |
 | Reconciliation | §4: `SUM(metric_value)` for `net_sales` against `SUM(net_sales)` | both sides are `DECIMAL`, so the comparison is exact |
+| Cancelled orders | — | `net_amount` over the detail mart, excluding cancelled orders, must equal `net_sales` over the summary |
+| Pivot | — | `total_pln` must equal the currency columns it is built from, and the pivot's total must equal the summary's `sales_pln` |
 
 The first check answers both halves of the §3 requirement, because they are the same question asked two ways — did any of the six joins multiply rows. More rows than distinct ids means a join fanned out; fewer rows than `fact_order` means a join dropped orders.
 
-All three are evaluated before anything is raised, so one run reports every failure it found instead of stopping at the first.
+The last two are not required. Each covers a decision a mart makes that no other check reaches, and each compares two tables rather than restating the rule the mart already applies. The summary is the only place cancelled orders are excluded, so nothing else would notice that exclusion going missing — every total would simply rise. The pivot is checked two ways because they catch different things: `total_pln` against its own columns catches that expression drifting from the column list when a currency is approved, while the pivot's total against the summary catches a currency that reached the summary without being in `dim_currency`, which the per-row comparison cannot see because `total_pln` is computed from the columns that remain.
+
+All five are evaluated before anything is raised, so one run reports every failure it found instead of stopping at the first.
 
 **Orphan foreign keys are deliberately not checked here.** A `customer_id` or `seller_id` absent from its dimension is a completeness question, and the DQX gates already report it as a warning at the Bronze to Silver boundary where the row enters. Failing the Gold publish for it would make a warning fatal two layers later.
 
@@ -183,12 +187,12 @@ Section 1's cleaning and section 2's DQX gates are implemented per flow, at each
 | DQX at the Bronze to Silver boundary | all eight gates |
 | One shared quarantine table | `silver_dq_quarantine` |
 
-45 rules in eight files under [checks/](../../checks):
+46 rules in eight files under [checks/](../../checks):
 
 | File | Rules | Completeness | Uniqueness | Validity | Referential |
 |---|---|---|---|---|---|
 | `silver_order.yml` | 8 | 1 | 1 | 3 | 3 |
-| `silver_invoice.yml` | 9 | 6 | 1 | 1 | 1 |
+| `silver_invoice.yml` | 10 | 6 | 1 | 1 | 2 |
 | `silver_seller.yml` | 6 | 2 | 2 | 1 | 1 |
 | `silver_exchange_rate.yml` | 5 | 2 | 1 | 1 | 1 |
 | `silver_customer.yml` | 5 | 2 | 1 | 1 | 1 |

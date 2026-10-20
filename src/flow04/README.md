@@ -127,12 +127,17 @@ The fields are extracted by an LLM, so any of them can come back missing. That i
 | `invoice_id_is_not_unique` | `is_unique` | uniqueness | error |
 | `net_plus_vat_is_not_gross` | `sql_expression` | validity | error |
 | `order_id_not_in_silver_order` | `foreign_key` | referential integrity | warn |
+| `net_amount_differs_from_order` | `sql_query` | referential integrity | warn |
 
 An `error` row goes to `silver_dq_quarantine` and never reaches Silver. A `warn` row goes to both — an invoice billing an order that has not loaded yet is still a real invoice, and losing it would understate revenue.
 
 `order_id_is_null` is an `error` for the same reason the amounts are: `fact_invoice` needs the order id to join an invoice to its order, and `gold_datamart_order_sales_detail` carries no invoice column at all without it. The foreign key rule cannot stand in for it — `foreign_key` does not report a NULL, because a missing value is not a violation of integrity — so without this rule an invoice whose order id failed to extract passes the gate silently and shows up as an all-NULL column in the mart.
 
 `net_plus_vat_is_not_gross` is the requirement's own arithmetic. All three amounts are `DECIMAL(18,2)`, so the comparison is exact rather than approximate. A row with a missing amount makes the expression NULL and is not flagged here; the completeness rules catch it instead.
+
+`net_amount_differs_from_order` is what that arithmetic cannot do. The amounts are extracted from text that carries a decimal comma and sometimes the currency attached, so the parse in [03_build_silver_invoice.py](../../src/flow04/03_build_silver_invoice.py) strips and rewrites the number before casting it. A misread of the format scales all three amounts together, and `49,00 + 11,27 = 60,27` read as `4900 + 1127 = 6027` still adds up — so the arithmetic rule sees an inconsistent reading but never a wrong one. The order is the independent reference: an invoice bills one order, and its net amount is that order's amount, so comparing the two catches a misread whatever form it takes, including formats this gate has never met.
+
+It is a `sql_query` rather than `compare_datasets` because `compare_datasets` compares every column the two frames share — `ingested_at` among them, which always differs — and matches rows on `order_id`, which two invoices may share. The query merges on `invoice_id`, which is unique, so each invoice is judged on its own. An invoice whose order has not loaded does not join and is not flagged, the same tolerance `order_id_not_in_silver_order` is set to. `warn` rather than `error` for a reason of its own: a disagreement does not say which side is wrong, and rejecting the invoice would understate revenue to guard against what may be the order's fault.
 
 **One consequence to know:** `silver_invoice` can be incomplete. One bad extraction out of thirty means twenty-nine invoices are published and one is quarantined, so a total summed over the table is wrong without looking wrong. The gap is visible rather than silent — it shows up as a quarantine row, which is what flow 07's quarantine alert watches.
 

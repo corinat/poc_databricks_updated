@@ -117,3 +117,51 @@
       ref_columns:
         - order_id
       ref_df_name: silver_order
+
+# ── Agreement with the order ──
+# The arithmetic rule above compares the three amounts with each other, which
+# holds at whatever scale they were read: a parse that turned '49,00' into 4900
+# scales net, VAT and gross together, and 4900 + 1127 = 6027 still adds up. So
+# that rule cannot see a misread of the number format, only an inconsistent
+# one, and the amounts are extracted from text that arrives with a decimal
+# comma and sometimes a currency attached.
+#
+# The order is the independent reference the invoice can be held against: an
+# invoice bills one order, and its net amount is that order's amount. Comparing
+# the two catches a misread whatever form it takes, including formats this gate
+# has never seen, which is what an expression over the invoice's own columns
+# cannot do.
+#
+# sql_query rather than compare_datasets: compare_datasets matches rows on the
+# columns given and compares every column the two frames share, which here
+# includes ingested_at — always different — so it would flag every invoice
+# unless that column were excluded. It also matches on order_id, and two
+# invoices may bill the same order. This query merges on invoice_id, which is
+# unique, so each invoice is judged on its own.
+#
+# The query returns one row per invoice that joined; `condition` true means the
+# check failed, and DQX joins the result back on merge_columns. An invoice
+# whose order has not loaded yet does not join, gets no condition, and is not
+# flagged — the same tolerance the foreign key above is set to, for the same
+# reason.
+#
+# warn, not error: the two sides disagreeing does not say which one is wrong,
+# and an invoice is the document of record for a sale that happened. Rejecting
+# it would understate revenue to protect against a disagreement that may be the
+# order's fault. A NULL amount makes the comparison NULL rather than true; the
+# completeness rules above are what catch that.
+- name: net_amount_differs_from_order
+  criticality: warn
+  check:
+    function: sql_query
+    arguments:
+      merge_columns:
+        - invoice_id
+      query: |
+        SELECT
+            i.invoice_id,
+            i.net_amount <> o.net_amount AS condition
+        FROM {{ input_view }} AS i
+        JOIN {{ silver_order }} AS o
+          ON i.order_id = o.order_id
+      msg: net_amount must equal the net amount of the order the invoice bills

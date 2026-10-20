@@ -1,4 +1,4 @@
-"""The two transformations that are exercised by tests.
+"""The four transformations that are exercised by tests.
 
 Both are plain functions over table names rather than code inside a notebook,
 for one reason: a notebook reads widgets at import time and writes to a real
@@ -44,27 +44,39 @@ limit Spark uses to stop a cycle. Its name is interpolated into SQL, and is
 always one the bundle computes or a test defines.
 """
 
-from pyspark.sql import Window
+from pyspark.sql import DataFrame, SparkSession, Window
 from pyspark.sql import functions as F
 
 
-def customer_hierarchy(spark, source: str, country_expr: str):
-    """One row per customer, with its place in the hierarchy.
+def customer_hierarchy(
+    spark: SparkSession,
+    source: str,
+    country_expr: str,
+) -> DataFrame:
+    """Walk the customer parent links and place each customer in its tree.
+
+    Deliveries are deduplicated to one row per customer first, newest batch
+    winning, so a customer redelivered with a new parent is walked from its
+    latest known position.
+
+    A cycle in `parent_customer_id` would recurse forever. Spark's recursion
+    limit stops it and fails the query instead, when the returned frame is
+    evaluated rather than when this function is called.
 
     Args:
-        spark: the session.
-        source: table or view holding the Bronze customer deliveries.
-        country_expr: SQL for the country column. Bronze is written with
-            mergeSchema, so whether `country`, `country_code` or both exist
-            depends on which batches have arrived; the caller builds the
+        spark: Session the recursive query runs on.
+        source: Table or view holding the Bronze customer deliveries.
+        country_expr: SQL expression for the country column. Bronze is written
+            with `mergeSchema`, so whether `country`, `country_code` or both
+            exist depends on which batches have arrived; the caller builds the
             expression from the columns actually present.
 
-    Returns a frame with customer_id, customer_name, country_code,
-    parent_customer_id, level, hierarchy_path, root_customer_id, source_file
-    and ingested_at.
-
-    A cycle in parent_customer_id would recurse forever; Spark's recursion
-    limit stops it and fails the query instead.
+    Returns:
+        One row per `customer_id`, holding `customer_id`, `customer_name`,
+        `country_code`, `parent_customer_id`, `level`, `hierarchy_path`,
+        `root_customer_id`, `source_file` and `ingested_at`. A customer whose
+        parent is absent from the source is returned as a root — `level` 0
+        with `parent_customer_id` still set — rather than dropped.
     """
     return spark.sql(f"""
         WITH RECURSIVE cleaned AS (
@@ -148,25 +160,23 @@ def customer_hierarchy(spark, source: str, country_expr: str):
 
 
 def order_sales_detail(
-    fact_order,
-    fact_invoice,
-    fact_exchange_rate,
-    dim_customer,
-    dim_product,
-    dim_currency,
-    dim_seller,
-):
-    """One row per order, with the six left joins flow 06 section 3 specifies.
-
-    Args are one DataFrame per source.
+    fact_order: DataFrame,
+    fact_invoice: DataFrame,
+    fact_exchange_rate: DataFrame,
+    dim_customer: DataFrame,
+    dim_product: DataFrame,
+    dim_currency: DataFrame,
+    dim_seller: DataFrame,
+) -> DataFrame:
+    """Join the star schema into the detail mart flow 06 section 3 specifies.
 
     Two of the six joins can multiply rows, and both are reduced to one row per
     order before they are joined rather than checked afterwards:
 
-      invoice_per_order   fact_invoice is one row per invoice_id and nothing
-                          stops two invoices from carrying the same order_id.
-                          The latest invoice_date wins, then the highest
-                          invoice_id breaks a tie.
+      invoice_per_order   `fact_invoice` is one row per `invoice_id` and
+                          nothing stops two invoices from carrying the same
+                          `order_id`. The latest `invoice_date` wins, then the
+                          highest `invoice_id` breaks a tie.
 
       rate_per_order      the rate is matched on a range, so every rate
                           published up to the order date qualifies. The latest
@@ -176,13 +186,37 @@ def order_sales_detail(
 
     The reporting currency is the exception to needing a published rate: NBP
     does not quote the zloty against itself, so its rate is 1 by definition,
-    taken from dim_currency's is_reporting_currency flag rather than from the
-    literal 'PLN'.
+    taken from `dim_currency`'s `is_reporting_currency` flag rather than from
+    the literal 'PLN'.
 
-    dim_customer and dim_seller contribute no column. They are joined because
-    section 3's table lists them and every key they would resolve is already
-    carried by the order or the invoice; a duplicated key in either would
-    multiply rows here, which the check_marts task catches.
+    Args:
+        fact_order: Order facts, one row per order. This frame drives the row
+            count; the six joins are all left joins onto it.
+        fact_invoice: Invoice facts, one row per `invoice_id`. Contributes
+            `invoice_id`, `seller_id`, `vat_amount` and `gross_amount`.
+        fact_exchange_rate: Published rates, matched on currency and on a date
+            range rather than on equality.
+        dim_customer: Customer dimension. Contributes no column — it is joined
+            because section 3's table lists it, and every key it would resolve
+            is already carried by the order. A duplicated `customer_id` here
+            would multiply rows, which flow 06's check_marts task catches.
+        dim_product: Product dimension. Contributes `category`.
+        dim_currency: Currency dimension. Contributes `is_reporting_currency`,
+            which decides the implied rate above.
+        dim_seller: Seller dimension, reached through the invoice rather than
+            the order. Contributes no column, on the same terms as
+            `dim_customer`.
+
+    Returns:
+        One row per row of `fact_order`, holding `order_id`, `order_date`,
+        `customer_id`, `product_id`, `seller_id`, `currency_code`,
+        `product_category`, `invoice_id`, `quantity`, `net_amount`,
+        `vat_amount`, `gross_amount`, `rate_to_pln`, `order_amount_pln` and
+        `order_status`. `seller_id`, `invoice_id`, `vat_amount` and
+        `gross_amount` are NULL for an order no invoice refers to;
+        `rate_to_pln` and `order_amount_pln` are NULL for an order in a
+        currency with no rate published on or before its date, rather than
+        falling back to the unconverted amount.
     """
     one_invoice = Window.partitionBy("order_id").orderBy(
         F.col("invoice_date").desc(), F.col("invoice_id").desc()
@@ -267,27 +301,36 @@ def order_sales_detail(
     )
 
 
-def cleaned_orders(orders_df):
-    """One row per order_id, renamed and cast to the data model.
-
-    Args:
-        orders_df: the Bronze order deliveries.
+def cleaned_orders(orders_df: DataFrame) -> DataFrame:
+    """Reduce the Bronze order deliveries to one typed row per order.
 
     The three deliveries genuinely repeat rows — the stream replays the last
     eight orders and the schema-change delivery replays the first eight, both
     already in the batch file — so Bronze holds more rows than orders and this
     is where that is resolved.
 
-    Which copy survives: the most recent ingested_at, then the later
-    order_date. That ordering is what makes the schema-change delivery win for
-    the orders it replays, and so what gives those rows a sales_channel. Flow
-    05 asks for the widened column to be demonstrated, and it is demonstrated
-    there; reverse the ordering and the column is empty on every row, with
-    nothing failing, because sales_channel is not in FACT_ORDER and not in any
-    rule.
+    Which copy survives: the most recent `ingested_at`, then the later
+    `order_date`. That ordering is what makes the schema-change delivery win
+    for the orders it replays, and so what gives those rows a `sales_channel`.
+    Flow 05 asks for the widened column to be demonstrated, and it is
+    demonstrated there; reverse the ordering and the column is empty on every
+    row, with nothing failing, because `sales_channel` is not in FACT_ORDER
+    and not in any rule.
 
-    The window is applied after the select, so it orders by the cast order_date
-    rather than the Bronze string.
+    The window is applied after the select, so it orders by the cast
+    `order_date` rather than the Bronze string.
+
+    Args:
+        orders_df: Bronze order deliveries, which repeat rows and carry every
+            column as a string.
+
+    Returns:
+        One row per distinct `order_id`, holding `order_id`, `customer_id`,
+        `product_id`, `currency_code`, `order_date`, `quantity`, `unit_price`,
+        `net_amount`, `status`, `sales_channel`, `source_file` and
+        `ingested_at`, cast to the data model's types. `status` is lowercased
+        and trimmed; `currency` and `order_amount` are renamed to
+        `currency_code` and `net_amount`.
     """
     dedup = Window.partitionBy("order_id").orderBy(
         F.col("ingested_at").desc(), F.col("order_date").desc()
@@ -314,24 +357,36 @@ def cleaned_orders(orders_df):
     )
 
 
-def combined_rates(current_df, hist_df, columns: list[str]):
-    """One row per effectiveDate and code, from the two rate sources.
-
-    Args:
-        current_df: the rates fetched from the NBP API.
-        hist_df: the rates read from the historical CSV.
-        columns: the Silver column order to select, so the frame cannot drift
-            from the table it is written to.
+def combined_rates(
+    current_df: DataFrame,
+    hist_df: DataFrame,
+    columns: list[str],
+) -> DataFrame:
+    """Union the two rate sources into one row per rate date and currency.
 
     Each source is tagged twice at the point they are combined, which is the
-    one place the distinction cannot be mistaken. source_priority orders the
-    dedupe and is dropped; rate_source is kept.
+    one place the distinction cannot be mistaken. `source_priority` orders the
+    dedupe and is dropped; `rate_source` is kept.
 
     The API wins a date both sources carry, because it is the bank's own
     publication and the CSV is a copy. Reverse the priority and every
     overlapping date is labelled as coming from the CSV and converted at the
-    CSV's rate, with no rule to notice: no check mentions rate_source, and
+    CSV's rate, with no rule to notice: no check mentions `rate_source`, and
     nothing downstream reads it.
+
+    Args:
+        current_df: Rates fetched from the NBP API.
+        hist_df: Rates read from the historical CSV. Carries the same columns
+            as `current_df`, which is what lets the two be unioned by name.
+        columns: Silver column order to select, so the frame cannot drift from
+            the table it is written to.
+
+    Returns:
+        One row per `effectiveDate` and `code`, holding exactly `columns` in
+        that order. `rate_source` is added here, so it reaches the result only
+        because the caller lists it; `source_priority` is added for the dedupe
+        and never selected. Where both sources publish a date, the API row
+        survives; within one source, the latest `ingested_at` does.
     """
     combined = (
         current_df

@@ -279,10 +279,11 @@ test, because `is_unique` proves there is one row per key and says nothing about
 *which* row survived, and in all three cases the surviving row is identifiable
 only by a column that goes no further than Silver.
 
-Not covered, on purpose: anything the 45 DQX rules assert, the three checks
-`check_marts` runs against real data on every job run, the dimension and fact
-projections whose shape is pinned in DDL, and the summary, pivot and unpivot,
-whose output is the row counts each README documents.
+Not covered, on purpose: anything the 46 DQX rules assert, the five checks
+`check_marts` runs against real data on every job run, and the dimension and
+fact projections whose shape is pinned in DDL. The summary, the pivot and the
+unpivot are reconciled by three of those five checks against the table each was
+built from.
 
 The tests need a Spark session, from the workspace or from a local JDK. Both
 forms, what each one is particular about, and what the skip message means are in
