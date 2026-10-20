@@ -32,6 +32,8 @@ import sys
 import yaml
 from databricks.labs.dqx.engine import DQEngine
 from databricks.sdk import WorkspaceClient
+from pyspark.sql import Window
+from pyspark.sql import functions as F
 
 # COMMAND ----------
 # ── The shared quality-gate helpers ──
@@ -100,20 +102,27 @@ CREATE TABLE IF NOT EXISTS {table_name} (
 
 # ── Cast, rename and dedupe ──
 # No write here: the result is the frame the checks run against.
-products = spark.sql(f"""
-SELECT
-    product_id,
-    product_name,
-    category,
-    CAST(unit_price AS DECIMAL(18,2)) AS list_price,
-    source_file,
-    ingested_at
-FROM {bronze_table}
-QUALIFY row_number() OVER (
-    PARTITION BY product_id
-    ORDER BY ingested_at DESC, source_file
-) = 1
-""")
+# The window is applied after the select, so unit_price is already cast and
+# renamed by the time the dedupe runs. It orders on ingested_at and source_file,
+# neither of which the select touches, so the two are independent either way.
+dedup = Window.partitionBy("product_id").orderBy(
+    F.col("ingested_at").desc(), F.col("source_file").asc()
+)
+
+products = (
+    spark.table(bronze_table)
+    .select(
+        "product_id",
+        "product_name",
+        "category",
+        F.col("unit_price").cast("decimal(18,2)").alias("list_price"),
+        "source_file",
+        "ingested_at",
+    )
+    .withColumn("_rn", F.row_number().over(dedup))
+    .filter(F.col("_rn") == 1)
+    .drop("_rn")
+)
 
 # COMMAND ----------
 

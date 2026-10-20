@@ -40,6 +40,9 @@
 # number, which the model does not declare.
 
 # COMMAND ----------
+from pyspark.sql import functions as F
+
+# COMMAND ----------
 # ── Parameters (passed by DABs job as job-level parameters) ──
 # DABs dev mode prefixes schema names with dev_<username>_.
 # Compute the correct defaults so interactive runs match the bundle.
@@ -79,16 +82,20 @@ CREATE TABLE IF NOT EXISTS {table_name} (
 # COMMAND ----------
 
 # ── Publish, renaming to the model ──
-# `table` needs backticks: it is a reserved word in SQL.
 # The columns are named rather than selected with *, so currency, no and the
 # two tracking columns cannot leak into Gold.
-spark.sql(f"""
-INSERT OVERWRITE {table_name}
-SELECT
-    effectiveDate AS rate_date,
-    code          AS currency_code,
-    mid           AS rate_to_pln,
-    rate_source,
-    `table`       AS table_type
-FROM {silver_table}
-""")
+#
+# `table` needs no escaping here: it is passed as a column name rather than
+# parsed as SQL, so the reserved word is not one.
+(
+    spark.table(silver_table)
+    .select(
+        F.col("effectiveDate").alias("rate_date"),
+        F.col("code").alias("currency_code"),
+        F.col("mid").alias("rate_to_pln"),
+        "rate_source",
+        F.col("table").alias("table_type"),
+    )
+    .write.mode("overwrite")
+    .insertInto(table_name)
+)
