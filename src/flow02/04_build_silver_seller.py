@@ -27,6 +27,8 @@ import sys
 import yaml
 from databricks.labs.dqx.engine import DQEngine
 from databricks.sdk import WorkspaceClient
+from pyspark.sql import Window
+from pyspark.sql import functions as F
 
 # COMMAND ----------
 # ── The shared quality-gate helpers ──
@@ -102,24 +104,20 @@ CREATE TABLE IF NOT EXISTS {table_name} (
 # source_file is the same value on every row, so ingested_at alone decides and
 # the tiebreak is the key itself, which keeps the result deterministic when two
 # loads land in the same second.
-sellers = spark.sql(f"""
-SELECT
-    seller_id,
-    seller_name,
-    tax_id,
-    address,
-    postal_code,
-    city,
-    country,
-    currency_code,
-    source_file,
-    ingested_at
-FROM {bronze_table}
-QUALIFY row_number() OVER (
-    PARTITION BY seller_id
-    ORDER BY ingested_at DESC, seller_id
-) = 1
-""")
+#
+# The projection is SILVER_COLUMNS rather than a list of its own: nothing is
+# cast or renamed here, so the two would be the same list written twice.
+dedup = Window.partitionBy("seller_id").orderBy(
+    F.col("ingested_at").desc(), F.col("seller_id").asc()
+)
+
+sellers = (
+    spark.table(bronze_table)
+    .select(*SILVER_COLUMNS)
+    .withColumn("_rn", F.row_number().over(dedup))
+    .filter(F.col("_rn") == 1)
+    .drop("_rn")
+)
 
 # COMMAND ----------
 

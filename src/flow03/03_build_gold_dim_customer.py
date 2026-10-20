@@ -33,6 +33,9 @@
 # diagram and the table disagree. NULL makes the gap visible in the data.
 
 # COMMAND ----------
+from pyspark.sql import functions as F
+
+# COMMAND ----------
 # ── Parameters (passed by DABs job as job-level parameters) ──
 # DABs dev mode prefixes schema names with dev_<username>_.
 # Compute the correct defaults so interactive runs match the bundle.
@@ -74,13 +77,15 @@ CREATE TABLE IF NOT EXISTS {table_name} (
 # The columns are named rather than selected with *, so the hierarchy columns
 # and the Silver tracking columns cannot leak into Gold. The cast on the NULL
 # gives it the declared type instead of leaving it untyped.
-spark.sql(f"""
-INSERT OVERWRITE {table_name}
-SELECT
-    customer_id,
-    customer_name,
-    CAST(NULL AS STRING) AS customer_type,
-    country_code,
-    parent_customer_id
-FROM {silver_table}
-""")
+(
+    spark.table(silver_table)
+    .select(
+        "customer_id",
+        "customer_name",
+        F.lit(None).cast("string").alias("customer_type"),
+        "country_code",
+        "parent_customer_id",
+    )
+    .write.mode("overwrite")
+    .insertInto(table_name)
+)

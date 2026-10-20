@@ -30,6 +30,9 @@
 # unit needs no DDL change.
 
 # COMMAND ----------
+from pyspark.sql import functions as F
+
+# COMMAND ----------
 # ── Parameters (passed by DABs job as job-level parameters) ──
 # DABs dev mode prefixes schema names with dev_<username>_.
 # Compute the correct defaults so interactive runs match the bundle.
@@ -71,13 +74,15 @@ CREATE TABLE IF NOT EXISTS {table_name} (
 # The columns are named rather than selected with *, so a column added to
 # Silver cannot leak into Gold. The cast on the NULL gives it the declared type
 # instead of leaving it untyped.
-spark.sql(f"""
-INSERT OVERWRITE {table_name}
-SELECT
-    product_id,
-    product_name,
-    category,
-    list_price,
-    CAST(NULL AS STRING) AS unit_of_measure
-FROM {silver_table}
-""")
+(
+    spark.table(silver_table)
+    .select(
+        "product_id",
+        "product_name",
+        "category",
+        "list_price",
+        F.lit(None).cast("string").alias("unit_of_measure"),
+    )
+    .write.mode("overwrite")
+    .insertInto(table_name)
+)
