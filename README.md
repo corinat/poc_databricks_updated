@@ -303,6 +303,10 @@ uv run --no-project --with pyspark --with pytest \
 
 Verified in the second form: eight passed in about thirty seconds.
 
+That second form is also what runs in CI, on every pull request into `main` —
+see [.github/workflows/tests.yml](.github/workflows/tests.yml). It needs no
+credentials, because these tests reach no workspace.
+
 ## Getting started
 
 Choose how you want to work on this project:

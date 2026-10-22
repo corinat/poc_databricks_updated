@@ -92,3 +92,22 @@ SKIPPED [1] no Spark session available: Cluster id or serverless are required
 
 That means no JDK for a local session and no compute named in the profile.
 Either is enough; neither is configured.
+
+## In CI
+
+[.github/workflows/tests.yml](../.github/workflows/tests.yml) runs the suite on
+every pull request into `main`, and on pushes to `main`.
+
+It runs the command from [Locally, with no workspace](#locally-with-no-workspace),
+with `-v` in place of `-q` so the log names each test, and the JDK pinned to 17.
+Nothing else is substituted and no dependency is pinned, so a green run is
+evidence that the documented command still works rather than only that some
+CI-only variant of it does.
+The workflow needs no credentials: these tests reach no workspace.
+
+Two differences from a local run, neither of them a problem:
+
+- The `jupyter_core` warning does not appear. It comes from this repository's
+  `.venv`, which is gitignored and therefore absent on the runner.
+- `uv` supplies its own Python, so the runner's Python version does not matter
+  and there is no `setup-python` step.
