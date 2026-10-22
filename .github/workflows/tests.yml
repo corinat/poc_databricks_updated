@@ -22,24 +22,29 @@ on:
 
 jobs:
   transforms:
-    runs-on: ubuntu-latest
+    # Pinned rather than ubuntu-latest: that label began migrating to
+    # Ubuntu 26 in October 2026, and a runner image changing under a POC
+    # is a surprise with no upside here. Bump it deliberately.
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7.0.1
 
       # Spark 4 runs on JDK 17 or 21 and no later. A newer JDK fails inside
       # Spark's own initialisation, with ClassNotFoundException on
       # jdk.internal.ref.Cleaner, which reads as a Spark fault rather than a
       # Java version problem — so the version is pinned here, not left to
       # whatever the runner image ships.
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@v6.0.1
         with:
           distribution: temurin
           java-version: "17"
 
       # uv brings its own Python, so there is no setup-python step.
-      - uses: astral-sh/setup-uv@v5
+      # Exact version, not a major tag: setup-uv publishes no moving major
+      # tag, so `@v10` does not resolve.
+      - uses: astral-sh/setup-uv@v10.2.0
         with:
           enable-cache: true
 
