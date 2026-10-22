@@ -1,0 +1,66 @@
+# Runs the transformation tests on every pull request into main.
+#
+# These tests cover the four transformations in src/common/transforms.py. They
+# need a Spark session and nothing else: no workspace, no Databricks profile,
+# no secrets. That is why they can run here at all, and it is also the reason
+# this workflow has no credentials — a test that needed compute from the
+# workspace would belong in a bundle job instead.
+#
+# The command is the one tests/README.md documents for a local run, deliberately
+# rather than a CI-only variant. A green run here is then evidence that the
+# documented command works, and an upstream release that breaks it fails a pull
+# request instead of being discovered by the next person who follows the README.
+
+name: tests
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  transforms:
+    # Pinned rather than ubuntu-latest: that label began migrating to
+    # Ubuntu 26 in October 2026, and a runner image changing under a POC
+    # is a surprise with no upside here. Bump it deliberately.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v7.0.1
+
+      # Spark 4 runs on JDK 17 or 21 and no later. A newer JDK fails inside
+      # Spark's own initialisation, with ClassNotFoundException on
+      # jdk.internal.ref.Cleaner, which reads as a Spark fault rather than a
+      # Java version problem — so the version is pinned here, not left to
+      # whatever the runner image ships.
+      - uses: actions/setup-java@v6.0.1
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      # uv brings its own Python, so there is no setup-python step.
+      # Exact version, not a major tag: setup-uv publishes no moving major
+      # tag, so `@v10` does not resolve.
+      - uses: astral-sh/setup-uv@v10.2.0
+        with:
+          enable-cache: true
+
+      # --no-project: the test suite needs only pyspark and pytest. Installing
+      #   this project instead would pull databricks-connect and DQX, neither of
+      #   which these tests touch, and databricks-connect would then compete
+      #   with OSS pyspark for the same imports.
+      #
+      # --noconftest: tests/conftest.py is the bundle template's, and it opens a
+      #   Databricks Connect session eagerly in pytest_configure. There is no
+      #   workspace here, so loading it would fail the run before a test ran.
+      #   The suite carries its own spark fixture for exactly this reason.
+      #
+      # pyproject.toml's [tool.pytest.ini_options] still applies, which is what
+      # puts src/common on sys.path so `import transforms` resolves.
+      - name: Run the transformation tests
+        run: >
+          uv run --no-project --with pyspark --with pytest
+          pytest tests/test_transforms.py -v --noconftest
